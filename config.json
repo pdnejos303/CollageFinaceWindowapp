@@ -1,0 +1,22 @@
+{
+    "college_name": "วิทยาลัยอาชีวศึกษาสุพรรณบุรี",
+    "college_address": "455 ถ.พระพันวษา ต.ท่าพี่เลี้ยง อ.เมืองสุพรรณบุรี จ.สุพรรณบุรี 72000",
+    "college_tax_id": "0994000159721",
+    "fiscal_year": "2569",
+    "current_semester": "1/2569",
+    "cashier_position": "ครู",
+    "receipt_book_no": "7006",
+    "receipt_prefix": "",
+    "receipt_no_start": "700605433",
+    "receipt_no_end": "700611000",
+    "db_engine": "sqlite",
+    "database_url": "",
+    "webhook_url": "",
+    "webhook_enabled": false,
+    "webhook_alert_threshold": 50000.0,
+    "auto_backup_on_exit": true,
+    "auto_lock_minutes": 15,
+    "default_export_folder": "D:/111Work/1111111/CollegeFinanceGodApp/exports_output",
+    "evidence_folder": "D:\\111Work\\1111111\\CollegeFinanceGodApp\\data\\evidence",
+    "theme_accent": "#000000"
+}
