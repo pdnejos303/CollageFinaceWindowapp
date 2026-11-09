@@ -7,6 +7,8 @@ import customtkinter as ctk
 from core.config import (
     backup_database,
     export_full_zip_backup,
+    format_receipt_date_thai,
+    format_thai_date_short,
     restore_database,
     save_config,
     thai_baht_text,
@@ -300,7 +302,7 @@ class SmartReceiptPOSView(ctk.CTkFrame):
 
         self.entry_date = make_entry(s1_title, width=105, height=32, bold=False)
         self.entry_date.pack(side="right", padx=(4, 10))
-        self.entry_date.insert(0, datetime.date.today().isoformat())
+        self.entry_date.insert(0, format_thai_date_short())
         ctk.CTkLabel(
             s1_title,
             text="วันที่:",
@@ -318,6 +320,9 @@ class SmartReceiptPOSView(ctk.CTkFrame):
         ).pack(side="right")
 
         # Main Student Selector Row
+        self.STUDENT_DROPDOWN_LIMIT = 200
+        self._stu_search_job: Optional[str] = None
+
         r1 = ctk.CTkFrame(step1_card, fg_color="transparent")
         r1.pack(fill="x", padx=16, pady=(4, 6))
 
@@ -332,11 +337,21 @@ class SmartReceiptPOSView(ctk.CTkFrame):
             r1,
             values=self.class_levels,
             variable=self.filter_class_var,
-            width=130,
+            width=125,
             height=38,
             command=lambda _v: self.refresh_student_list(),
         )
-        self.opt_filter_class.pack(side="left", padx=(0, 14))
+        self.opt_filter_class.pack(side="left", padx=(0, 10))
+
+        self.entry_stu_search = make_entry(
+            r1,
+            width=185,
+            height=38,
+            bold=False,
+            placeholder_text="🔍 ค้นหารหัส/ชื่อ...",
+        )
+        self.entry_stu_search.pack(side="left", padx=(0, 10))
+        self.entry_stu_search.bind("<KeyRelease>", self._schedule_student_search)
 
         ctk.CTkLabel(
             r1,
@@ -361,21 +376,23 @@ class SmartReceiptPOSView(ctk.CTkFrame):
 
         ctk.CTkLabel(
             r2,
-            text="ชื่อผู้ชำระ:",
+            text="ได้รับเงินจาก:",
             font=(AppTheme.FONT_FAMILY, 13),
             text_color=AppTheme.COLOR_TEXT_SECONDARY,
         ).pack(side="left", padx=(0, 4))
-        self.entry_stu_name = make_entry(r2, width=190, height=34)
+        self.entry_stu_name = make_entry(r2, width=185, height=34)
         self.entry_stu_name.pack(side="left", padx=(0, 10))
 
         ctk.CTkLabel(
             r2,
-            text="รหัส:",
+            text="รหัสประจำตัว:",
             font=(AppTheme.FONT_FAMILY, 13),
             text_color=AppTheme.COLOR_TEXT_SECONDARY,
         ).pack(side="left", padx=(0, 4))
         self.entry_stu_code = make_entry(r2, width=110, height=34)
         self.entry_stu_code.pack(side="left", padx=(0, 10))
+        self.entry_stu_code.bind("<Return>", self._lookup_student_by_code_entry)
+        self.entry_stu_code.bind("<FocusOut>", self._lookup_student_by_code_entry)
 
         ctk.CTkLabel(
             r2,
@@ -396,7 +413,7 @@ class SmartReceiptPOSView(ctk.CTkFrame):
 
         ctk.CTkLabel(
             r2,
-            text="สาขา:",
+            text="แผนกวิชา:",
             font=(AppTheme.FONT_FAMILY, 13),
             text_color=AppTheme.COLOR_TEXT_SECONDARY,
         ).pack(side="left", padx=(0, 4))
@@ -413,7 +430,7 @@ class SmartReceiptPOSView(ctk.CTkFrame):
 
         ctk.CTkLabel(
             r2,
-            text="ห้อง:",
+            text="ชั้น:",
             font=(AppTheme.FONT_FAMILY, 13),
             text_color=AppTheme.COLOR_TEXT_SECONDARY,
         ).pack(side="left", padx=(0, 4))
@@ -528,15 +545,43 @@ class SmartReceiptPOSView(ctk.CTkFrame):
     def refresh_next_receipt_no(self):
         prefix = self.config.get("receipt_prefix", "")
         start_no = self.config.get("receipt_no_start", "700605433")
-        end_no = self.config.get("receipt_no_end", "700611000")
+        end_no = self.config.get("receipt_no_end", "700999999")
         nxt = self.db.get_next_receipt_no(prefix, start_no=start_no, end_no=end_no)
         self.entry_rcp_no.delete(0, "end")
         self.entry_rcp_no.insert(0, nxt)
 
+    def _schedule_student_search(self, _event=None):
+        if self._stu_search_job is not None:
+            try:
+                self.after_cancel(self._stu_search_job)
+            except Exception:
+                pass
+        self._stu_search_job = self.after(250, self.refresh_student_list)
+
+    def _lookup_student_by_code_entry(self, _event=None):
+        code = self.entry_stu_code.get().strip()
+        if not code:
+            return
+        stu = self.db.get_student_by_code(code)
+        if stu:
+            self.entry_stu_name.delete(0, "end")
+            self.entry_stu_name.insert(0, stu.get("full_name", ""))
+            self.fac_var.set(stu.get("faculty") or self.faculties[0])
+            self.dept_var.set(stu.get("major") or self.departments[0])
+            self.cls_var.set(stu.get("class_group") or "ปวช.1/1")
+
     def refresh_student_list(self):
+        self._stu_search_job = None
         cls_filter = self.filter_class_var.get()
+        lvl = cls_filter if cls_filter != "ทั้งหมด" else "ALL"
+        search_txt = self.entry_stu_search.get().strip() if hasattr(self, "entry_stu_search") else ""
+
+        total_matching = self.db.count_students(search=search_txt, level_filter=lvl)
         self.students = self.db.get_students(
-            level_filter=cls_filter if cls_filter != "ทั้งหมด" else "ALL"
+            search=search_txt,
+            level_filter=lvl,
+            limit=self.STUDENT_DROPDOWN_LIMIT,
+            offset=0,
         )
         self.student_map.clear()
         labels = []
@@ -546,10 +591,15 @@ class SmartReceiptPOSView(ctk.CTkFrame):
             labels.append(lbl)
 
         if not labels:
-            labels = ["ไม่พบรายชื่อนักศึกษาในห้องนี้"]
+            labels = ["ไม่พบรายชื่อนักศึกษาที่ค้นหา"]
             self.opt_student.configure(values=labels)
             self.stu_var.set(labels[0])
             return
+
+        if total_matching > len(self.students):
+            labels.append(
+                f"--- แสดง {len(self.students):,} จาก {total_matching:,} คน (พิมพ์ค้นหาหรือเลือกห้องเรียนเพื่อกรองเพิ่ม) ---"
+            )
 
         self.opt_student.configure(values=labels)
         self.stu_var.set(labels[0])
@@ -721,7 +771,7 @@ class SmartReceiptPOSView(ctk.CTkFrame):
                 custom_major=self.dept_var.get(),
                 custom_class_group=self.cls_var.get(),
                 start_no=self.config.get("receipt_no_start", "700605433"),
-                end_no=self.config.get("receipt_no_end", "700611000"),
+                end_no=self.config.get("receipt_no_end", "700999999"),
             )
 
             export_document_auto(
@@ -859,7 +909,7 @@ class SmartReceiptPOSView(ctk.CTkFrame):
                 messagebox.showwarning("ไม่พบข้อมูล", "ไม่พบรายชื่อนักศึกษาในไฟล์ที่เลือก")
                 return
             self.refresh_student_list()
-            imported_students = [s for s in self.db.get_students() if s["student_code"] in codes]
+            imported_students = self.db.get_students_by_codes(codes)
             if not messagebox.askyesno(
                 "นำเข้ารายชื่อสำเร็จ",
                 f"นำเข้ารายชื่อสำเร็จ {len(imported_students)} คน!\nต้องการออกใบเสร็จให้ทั้ง {len(imported_students)} คนทันทีหรือไม่?",
@@ -917,7 +967,7 @@ class SmartReceiptPOSView(ctk.CTkFrame):
                 book_no=self.config.get("receipt_book_no", "7006"),
                 cashier_position=self.config.get("cashier_position", "ครู"),
                 start_no=self.config.get("receipt_no_start", "700605433"),
-                end_no=self.config.get("receipt_no_end", "700611000"),
+                end_no=self.config.get("receipt_no_end", "700999999"),
                 receipt_date_override=self.entry_date.get().strip(),
             )
 
@@ -1115,6 +1165,10 @@ class StudentAndFeeCatalogView(ctk.CTkFrame):
         fb_in = ctk.CTkFrame(filter_bar, fg_color="transparent")
         fb_in.pack(fill="x", padx=16, pady=10)
 
+        self.page_size = 100
+        self.current_page = 1
+        self._search_job: Optional[str] = None
+
         ctk.CTkLabel(
             fb_in,
             text="กรองสาขา:",
@@ -1128,7 +1182,7 @@ class StudentAndFeeCatalogView(ctk.CTkFrame):
             variable=self.flt_dept_var,
             width=180,
             height=38,
-            command=lambda _v: self.refresh_table(),
+            command=lambda _v: self._reset_and_refresh(),
         ).pack(side="left", padx=(0, 14))
 
         ctk.CTkLabel(
@@ -1144,7 +1198,7 @@ class StudentAndFeeCatalogView(ctk.CTkFrame):
             variable=self.flt_cls_var,
             width=130,
             height=38,
-            command=lambda _v: self.refresh_table(),
+            command=lambda _v: self._reset_and_refresh(),
         ).pack(side="left", padx=(0, 14))
 
         self.ent_search = make_entry(
@@ -1154,7 +1208,7 @@ class StudentAndFeeCatalogView(ctk.CTkFrame):
             placeholder_text="🔍 ค้นหารหัสนักศึกษา หรือ ชื่อ-นามสกุล...",
         )
         self.ent_search.pack(side="left", fill="x", expand=True)
-        self.ent_search.bind("<KeyRelease>", lambda _e: self.refresh_table())
+        self.ent_search.bind("<KeyRelease>", self._schedule_search)
 
         cols = [
             ("student_code", "รหัสนักศึกษา", 140, "center"),
@@ -1164,20 +1218,60 @@ class StudentAndFeeCatalogView(ctk.CTkFrame):
             ("class_group", "ระดับชั้น / ห้อง", 130, "center"),
             ("paid_amount", "ยอดชำระสะสม (บาท)", 160, "e"),
         ]
-        self.table = DataTable(self, columns=cols, height=6, on_select=self.on_select_row, show_inspector=False)
+        self.table = DataTable(
+            self,
+            columns=cols,
+            height=6,
+            on_select=self.on_select_row,
+            show_inspector=False,
+            page_size=self.page_size,
+            on_page_change=self.on_page_change,
+            show_pagination=True,
+        )
         self.table.pack(side="top", fill="both", expand=True)
 
+        self.refresh_table()
+
+    def _schedule_search(self, _event=None):
+        if self._search_job is not None:
+            try:
+                self.after_cancel(self._search_job)
+            except Exception:
+                pass
+        self._search_job = self.after(250, self._reset_and_refresh)
+
+    def _reset_and_refresh(self):
+        self._search_job = None
+        self.current_page = 1
+        self.refresh_table()
+
+    def on_page_change(self, new_page: int):
+        self.current_page = max(1, int(new_page))
         self.refresh_table()
 
     def refresh_table(self):
         s_txt = self.ent_search.get().strip()
         f_dept = self.flt_dept_var.get()
         f_cls = self.flt_cls_var.get()
+        maj_flt = f_dept if f_dept != "ทั้งหมด" else "ALL"
+        lvl_flt = f_cls if f_cls != "ทั้งหมด" else "ALL"
 
+        total_count = self.db.count_students(
+            search=s_txt,
+            major_filter=maj_flt,
+            level_filter=lvl_flt,
+        )
+        max_pages = max(1, (total_count + self.page_size - 1) // self.page_size)
+        if self.current_page > max_pages:
+            self.current_page = max_pages
+
+        offset = (self.current_page - 1) * self.page_size
         students = self.db.get_students(
             search=s_txt,
-            major_filter=f_dept if f_dept != "ทั้งหมด" else "ALL",
-            level_filter=f_cls if f_cls != "ทั้งหมด" else "ALL",
+            major_filter=maj_flt,
+            level_filter=lvl_flt,
+            limit=self.page_size,
+            offset=offset,
         )
         rows = []
         for s in students:
@@ -1194,7 +1288,7 @@ class StudentAndFeeCatalogView(ctk.CTkFrame):
                     "PAID",
                 )
             )
-        self.table.set_rows(rows)
+        self.table.set_rows(rows, total_count=total_count, page=self.current_page)
 
     def on_select_row(self, vals: List[str]):
         if len(vals) < 5:
@@ -1217,8 +1311,8 @@ class StudentAndFeeCatalogView(ctk.CTkFrame):
         if not code or not name:
             messagebox.showwarning("ข้อมูลไม่ครบ", "กรุณากรอกรหัสนักศึกษาและชื่อ-นามสกุล")
             return
-        existing = self.db.get_students(search=code)
-        is_exact = any(s["student_code"] == code for s in existing)
+        existing = self.db.get_student_by_code(code)
+        is_exact = existing is not None
         try:
             if is_exact:
                 self.db.update_student(
@@ -1421,6 +1515,10 @@ class ReceiptRegisterView(ctk.CTkFrame):
         if today_str not in dates:
             dates.insert(1, today_str)
 
+        self.page_size = 100
+        self.current_page = 1
+        self._search_job: Optional[str] = None
+
         self.date_var = ctk.StringVar(value="ทั้งหมด")
         self.opt_date = make_dropdown(
             tb_in,
@@ -1428,7 +1526,7 @@ class ReceiptRegisterView(ctk.CTkFrame):
             variable=self.date_var,
             width=155,
             height=38,
-            command=lambda _v: self.refresh_receipts(),
+            command=lambda _v: self._reset_and_refresh(),
         )
         self.opt_date.pack(side="left", padx=(0, 14))
 
@@ -1439,7 +1537,7 @@ class ReceiptRegisterView(ctk.CTkFrame):
             placeholder_text="🔍 ค้นหาเลขที่ใบเสร็จ / รหัส / ชื่อนักศึกษา...",
         )
         self.ent_search.pack(side="left", fill="x", expand=True, padx=(0, 16))
-        self.ent_search.bind("<KeyRelease>", lambda _e: self.refresh_receipts())
+        self.ent_search.bind("<KeyRelease>", self._schedule_search)
 
         self.lbl_summary = ctk.CTkLabel(
             tb_in,
@@ -1459,33 +1557,73 @@ class ReceiptRegisterView(ctk.CTkFrame):
             ("net_total_amount", "จำนวนเงินรวม", 130, "e"),
             ("status", "สถานะ", 100, "center"),
         ]
-        self.table = DataTable(self, columns=cols, height=6, on_select=self.on_select_row, show_inspector=False)
+        self.table = DataTable(
+            self,
+            columns=cols,
+            height=6,
+            on_select=self.on_select_row,
+            show_inspector=False,
+            page_size=self.page_size,
+            on_page_change=self.on_page_change,
+            show_pagination=True,
+        )
         self.table.pack(side="top", fill="both", expand=True)
 
         self.refresh_receipts()
 
+    def _schedule_search(self, _event=None):
+        if self._search_job is not None:
+            try:
+                self.after_cancel(self._search_job)
+            except Exception:
+                pass
+        self._search_job = self.after(250, self._reset_and_refresh)
+
+    def _reset_and_refresh(self):
+        self._search_job = None
+        self.current_page = 1
+        self.refresh_receipts()
+
+    def on_page_change(self, new_page: int):
+        self.current_page = max(1, int(new_page))
+        self.refresh_receipts()
+
     def refresh_receipts(self):
         d_val = self.date_var.get()
-        receipts = self.db.get_receipts(
-            search=self.ent_search.get().strip(),
+        search_txt = self.ent_search.get().strip()
+        date_pref = d_val if d_val != "ทั้งหมด" else ""
+
+        stats = self.db.get_receipts_stats(
             status_filter="ALL",
-            date_prefix=d_val if d_val != "ทั้งหมด" else "",
+            search=search_txt,
+            date_prefix=date_pref,
+        )
+        total_count = stats["total_count"]
+        valid_count = stats["valid_count"]
+        total_amt = stats["total_amount"]
+
+        max_pages = max(1, (total_count + self.page_size - 1) // self.page_size)
+        if self.current_page > max_pages:
+            self.current_page = max_pages
+
+        offset = (self.current_page - 1) * self.page_size
+        receipts = self.db.get_receipts(
+            search=search_txt,
+            status_filter="ALL",
+            date_prefix=date_pref,
+            limit=self.page_size,
+            offset=offset,
         )
         rows = []
-        total_amt = 0.0
-        valid_count = 0
         for r in receipts:
             st = r.get("status", "ISSUED")
             amt = float(r.get("net_total_amount", 0))
-            if st == "ISSUED":
-                total_amt += amt
-                valid_count += 1
             tag = "PAID" if st == "ISSUED" else "VOIDED"
             rows.append(
                 (
                     [
                         r["receipt_no"],
-                        str(r["receipt_date"])[:10],
+                        format_receipt_date_thai(r["receipt_date"]),
                         r["student_code"],
                         r["snapshot_student_name"],
                         r["snapshot_class_group"],
@@ -1496,8 +1634,8 @@ class ReceiptRegisterView(ctk.CTkFrame):
                     tag,
                 )
             )
-        self.table.set_rows(rows)
-        self.lbl_summary.configure(text=f"ยอดรับสุทธิ: ฿{total_amt:,.2f} บาท ({valid_count} ฉบับ)")
+        self.table.set_rows(rows, total_count=total_count, page=self.current_page)
+        self.lbl_summary.configure(text=f"ยอดรับสุทธิ: ฿{total_amt:,.2f} บาท ({valid_count:,} ฉบับ)")
 
     def on_select_row(self, vals: List[str]):
         if vals:
@@ -2002,7 +2140,7 @@ class SettingsAndBackupView(ctk.CTkFrame):
 
         self.ent_book = self._labeled_entry(c_left, "เล่มที่ใบเสร็จ:", self.config.get("receipt_book_no", "7006"))
         self.ent_start_no = self._labeled_entry(c_left, "เลขที่ใบเสร็จตั้งแต่:", self.config.get("receipt_no_start", "700605433"))
-        self.ent_end_no = self._labeled_entry(c_left, "ถึงใบเสร็จเลขที่:", self.config.get("receipt_no_end", "700611000"))
+        self.ent_end_no = self._labeled_entry(c_left, "ถึงใบเสร็จเลขที่:", self.config.get("receipt_no_end", "700999999"))
 
         ctk.CTkButton(
             c_left,
@@ -2118,3 +2256,426 @@ class SettingsAndBackupView(ctk.CTkFrame):
             return
         restore_database(src, self.db.db_path)
         messagebox.showinfo("กู้คืนสำเร็จ", "กู้คืนฐานข้อมูลเรียบร้อยแล้ว!")
+
+
+# ==============================================================================
+# VIEW 5: COURSE REGISTRATION CARD VIEW (บัตรลงทะเบียนรายวิชา อศท.28 ตาม EXofBill)
+# ==============================================================================
+class CourseRegistrationView(ctk.CTkFrame):
+    """
+    Course Registration & Official 'บัตรลงทะเบียนรายวิชา (อศท.28)' Generator matching EXofBill:
+    - Select Student, Room, Academic Year, Major, Subject Type, Career Group
+    - Add / Edit / Remove up to 15 registered courses (รหัสวิชา, ชื่อวิชา, ท., ป., นก.)
+    - Displays Total ท. | ป. | นก. and Tuition Fee Summary (1,130 บาท)
+    - Exports Official 'บัตรลงทะเบียนรายวิชา (อศท.28)' (.pdf / .docx) with Krungthai Bank tear-off slip
+    """
+
+    def __init__(self, parent, db: DatabaseManager, session: UserSession, config: Dict[str, Any]):
+        super().__init__(parent, fg_color="transparent")
+        self.db = db
+        self.session = session
+        self.config = config
+
+        self.students = self.db.get_students()
+        self.student_map: Dict[str, Dict[str, Any]] = {}
+        self.course_catalog = self.db.get_course_catalog()
+        self.course_map: Dict[str, Dict[str, Any]] = {}
+        self.registered_courses: List[Dict[str, Any]] = []
+
+        header = SectionHeader(
+            self,
+            "บัตรลงทะเบียนรายวิชา (อศท.28)",
+            "จัดการรายวิชาลงทะเบียน (ท./ป./นก.) และพิมพ์บัตรลงทะเบียนรายวิชาพร้อมใบนำฝากธนาคารกรุงไทยตาม EXofBill",
+        )
+        header.pack(fill="x", pady=(0, 10))
+        header.add_action_button(
+            "🔄 โหลดวิชาตามหลักสูตรต้นฉบับ (11 วิชา)",
+            self.load_default_ex_courses,
+            fg_color=AppTheme.COLOR_SECONDARY_BG,
+            hover_color=AppTheme.COLOR_SECONDARY_HOVER,
+            text_color=AppTheme.COLOR_SECONDARY_TEXT,
+        )
+
+        # ------------------------------------------------------------------
+        # BOTTOM BAR: Total Credits + Print อศท.28 Button
+        # ------------------------------------------------------------------
+        btm_bar = ctk.CTkFrame(
+            self,
+            corner_radius=10,
+            fg_color=AppTheme.COLOR_SURFACE,
+            border_width=1,
+            border_color=AppTheme.COLOR_BORDER_STRONG,
+        )
+        btm_bar.pack(side="bottom", fill="x", pady=(10, 0))
+
+        btm_in = ctk.CTkFrame(btm_bar, fg_color="transparent")
+        btm_in.pack(fill="x", padx=18, pady=12)
+
+        self.lbl_totals = ctk.CTkLabel(
+            btm_in,
+            text="รวมชั่วโมง/หน่วยกิต: ทฤษฎี (ท.) 10  |  ปฏิบัติ (ป.) 20  |  หน่วยกิต (นก.) 19   •   ค่าธรรมเนียมการศึกษา: ฿1,130.00 บาท",
+            font=(AppTheme.FONT_FAMILY, 15, "bold"),
+            text_color=AppTheme.COLOR_ACCENT,
+        )
+        self.lbl_totals.pack(side="left")
+
+        btn_box = ctk.CTkFrame(btm_in, fg_color="transparent")
+        btn_box.pack(side="right")
+
+        ctk.CTkButton(
+            btn_box,
+            text="ลบวิชาที่เลือก",
+            width=115,
+            height=40,
+            corner_radius=8,
+            fg_color=AppTheme.COLOR_NEUTRAL_BTN,
+            hover_color=AppTheme.COLOR_NEUTRAL_BTN_HOVER,
+            text_color=AppTheme.COLOR_TEXT_SECONDARY,
+            font=(AppTheme.FONT_FAMILY, 13, "bold"),
+            command=self.remove_selected_course,
+        ).pack(side="left", padx=(0, 8))
+
+        ctk.CTkButton(
+            btn_box,
+            text="🖨️ บันทึก & พิมพ์บัตรลงทะเบียนรายวิชา อศท.28 (.pdf)",
+            width=340,
+            height=42,
+            corner_radius=8,
+            fg_color=AppTheme.COLOR_PRIMARY_BLUE,
+            hover_color=AppTheme.COLOR_PRIMARY_BLUE_HOVER,
+            text_color="#FFFFFF",
+            font=(AppTheme.FONT_FAMILY, 14, "bold"),
+            command=self.save_and_export_registration_card,
+        ).pack(side="left")
+
+        # ------------------------------------------------------------------
+        # STEP 1: Student & Curriculum Metadata Card
+        # ------------------------------------------------------------------
+        stu_card = ctk.CTkFrame(
+            self,
+            corner_radius=10,
+            fg_color=AppTheme.COLOR_SURFACE,
+            border_width=1,
+            border_color=AppTheme.COLOR_BORDER,
+        )
+        stu_card.pack(side="top", fill="x", pady=(0, 8))
+
+        r1 = ctk.CTkFrame(stu_card, fg_color="transparent")
+        r1.pack(fill="x", padx=16, pady=(10, 4))
+
+        ctk.CTkLabel(
+            r1,
+            text="เลือกนักศึกษา:",
+            font=(AppTheme.FONT_FAMILY, 13, "bold"),
+            text_color=AppTheme.COLOR_TEXT_SECONDARY,
+        ).pack(side="left", padx=(0, 6))
+
+        stu_labels = []
+        default_lbl = ""
+        for s in self.students:
+            lbl = f"{s['student_code']} — {s['full_name']} ({s['class_group']})"
+            self.student_map[lbl] = s
+            stu_labels.append(lbl)
+            if s["student_code"] == "69219100049":
+                default_lbl = lbl
+        if not stu_labels:
+            stu_labels = ["-"]
+        if not default_lbl:
+            default_lbl = stu_labels[0]
+
+        self.stu_var = ctk.StringVar(value=default_lbl)
+        self.opt_stu = make_dropdown(
+            r1,
+            values=stu_labels,
+            variable=self.stu_var,
+            width=340,
+            height=36,
+            command=self.on_select_student,
+        )
+        self.opt_stu.pack(side="left", padx=(0, 12))
+
+        ctk.CTkLabel(r1, text="รหัสนักศึกษา:", font=(AppTheme.FONT_FAMILY, 13), text_color=AppTheme.COLOR_TEXT_SECONDARY).pack(side="left", padx=(0, 4))
+        self.ent_code = make_entry(r1, width=115, height=34)
+        self.ent_code.pack(side="left", padx=(0, 10))
+
+        ctk.CTkLabel(r1, text="ชื่อ-นามสกุล:", font=(AppTheme.FONT_FAMILY, 13), text_color=AppTheme.COLOR_TEXT_SECONDARY).pack(side="left", padx=(0, 4))
+        self.ent_name = make_entry(r1, width=190, height=34)
+        self.ent_name.pack(side="left", padx=(0, 10))
+
+        ctk.CTkLabel(r1, text="ระดับชั้น:", font=(AppTheme.FONT_FAMILY, 13), text_color=AppTheme.COLOR_TEXT_SECONDARY).pack(side="left", padx=(0, 4))
+        self.ent_cls = make_entry(r1, width=85, height=34)
+        self.ent_cls.pack(side="left")
+
+        r2 = ctk.CTkFrame(stu_card, fg_color="transparent")
+        r2.pack(fill="x", padx=16, pady=(2, 10))
+
+        ctk.CTkLabel(r2, text="สาขาวิชา:", font=(AppTheme.FONT_FAMILY, 13), text_color=AppTheme.COLOR_TEXT_SECONDARY).pack(side="left", padx=(0, 4))
+        self.ent_major = make_entry(r2, width=170, height=34)
+        self.ent_major.pack(side="left", padx=(0, 10))
+
+        ctk.CTkLabel(r2, text="ประเภทวิชา:", font=(AppTheme.FONT_FAMILY, 13), text_color=AppTheme.COLOR_TEXT_SECONDARY).pack(side="left", padx=(0, 4))
+        self.ent_subj_type = make_entry(r2, width=230, height=34, bold=False)
+        self.ent_subj_type.pack(side="left", padx=(0, 10))
+        self.ent_subj_type.insert(0, "อุตสาหกรรมดิจิทัลและเทคโนโลยีสารสนเทศ")
+
+        ctk.CTkLabel(r2, text="กลุ่มอาชีพ:", font=(AppTheme.FONT_FAMILY, 13), text_color=AppTheme.COLOR_TEXT_SECONDARY).pack(side="left", padx=(0, 4))
+        self.ent_career = make_entry(r2, width=220, height=34, bold=False)
+        self.ent_career.pack(side="left", padx=(0, 10))
+        self.ent_career.insert(0, "ธุรกิจดิจิทัลและพาณิชย์อิเล็กทรอนิกส์")
+
+        ctk.CTkLabel(r2, text="ปีการศึกษา:", font=(AppTheme.FONT_FAMILY, 13), text_color=AppTheme.COLOR_TEXT_SECONDARY).pack(side="left", padx=(0, 4))
+        self.ent_year = make_entry(r2, width=70, height=34)
+        self.ent_year.pack(side="left")
+        self.ent_year.insert(0, self.config.get("fiscal_year", "2569"))
+
+        # ------------------------------------------------------------------
+        # STEP 2: Add Course Row Bar
+        # ------------------------------------------------------------------
+        add_bar = ctk.CTkFrame(
+            self,
+            corner_radius=10,
+            fg_color=AppTheme.COLOR_SURFACE,
+            border_width=1,
+            border_color=AppTheme.COLOR_BORDER,
+        )
+        add_bar.pack(side="top", fill="x", pady=(0, 8))
+
+        ab_in = ctk.CTkFrame(add_bar, fg_color="transparent")
+        ab_in.pack(fill="x", padx=16, pady=8)
+
+        course_labels = []
+        for c in self.course_catalog:
+            clbl = f"{c['course_code']} — {c['course_name']} ({c['theory_hours']}-{c['practice_hours']}-{c['credits']})"
+            self.course_map[clbl] = c
+            course_labels.append(clbl)
+        if not course_labels:
+            course_labels = ["-"]
+
+        ctk.CTkLabel(ab_in, text="เลือกรายวิชา:", font=(AppTheme.FONT_FAMILY, 13, "bold"), text_color=AppTheme.COLOR_ACCENT).pack(side="left", padx=(0, 6))
+        self.course_pick_var = ctk.StringVar(value=course_labels[0])
+        make_dropdown(
+            ab_in,
+            values=course_labels,
+            variable=self.course_pick_var,
+            width=260,
+            height=36,
+            command=self.on_pick_catalog_course,
+        ).pack(side="left", padx=(0, 8))
+
+        ctk.CTkLabel(ab_in, text="รหัสวิชา:", font=(AppTheme.FONT_FAMILY, 13), text_color=AppTheme.COLOR_TEXT_SECONDARY).pack(side="left", padx=(0, 4))
+        self.ent_c_code = make_entry(ab_in, width=105, height=36)
+        self.ent_c_code.pack(side="left", padx=(0, 8))
+
+        ctk.CTkLabel(ab_in, text="ชื่อวิชา:", font=(AppTheme.FONT_FAMILY, 13), text_color=AppTheme.COLOR_TEXT_SECONDARY).pack(side="left", padx=(0, 4))
+        self.ent_c_name = make_entry(ab_in, width=190, height=36)
+        self.ent_c_name.pack(side="left", fill="x", expand=True, padx=(0, 8))
+
+        ctk.CTkLabel(ab_in, text="ท.:", font=(AppTheme.FONT_FAMILY, 13), text_color=AppTheme.COLOR_TEXT_SECONDARY).pack(side="left", padx=(0, 2))
+        self.ent_c_t = make_entry(ab_in, width=42, height=36)
+        self.ent_c_t.pack(side="left", padx=(0, 6))
+
+        ctk.CTkLabel(ab_in, text="ป.:", font=(AppTheme.FONT_FAMILY, 13), text_color=AppTheme.COLOR_TEXT_SECONDARY).pack(side="left", padx=(0, 2))
+        self.ent_c_p = make_entry(ab_in, width=42, height=36)
+        self.ent_c_p.pack(side="left", padx=(0, 6))
+
+        ctk.CTkLabel(ab_in, text="นก.:", font=(AppTheme.FONT_FAMILY, 13), text_color=AppTheme.COLOR_TEXT_SECONDARY).pack(side="left", padx=(0, 2))
+        self.ent_c_cr = make_entry(ab_in, width=42, height=36)
+        self.ent_c_cr.pack(side="left", padx=(0, 8))
+
+        ctk.CTkButton(
+            ab_in,
+            text="➕ เพิ่มรายวิชา",
+            width=125,
+            height=36,
+            corner_radius=8,
+            fg_color=AppTheme.COLOR_SECONDARY_BG,
+            hover_color=AppTheme.COLOR_SECONDARY_HOVER,
+            border_width=1,
+            border_color=AppTheme.COLOR_SECONDARY_BORDER,
+            text_color=AppTheme.COLOR_SECONDARY_TEXT,
+            font=(AppTheme.FONT_FAMILY, 13, "bold"),
+            command=self.add_course_to_table,
+        ).pack(side="left")
+
+        cols = [
+            ("line_no", "ลำดับที่", 70, "center"),
+            ("course_code", "รหัสวิชา", 140, "center"),
+            ("course_name", "ชื่อวิชา", 450, "w"),
+            ("theory_hours", "ท. (ทฤษฎี)", 100, "center"),
+            ("practice_hours", "ป. (ปฏิบัติ)", 100, "center"),
+            ("credits", "นก. (หน่วยกิต)", 110, "center"),
+        ]
+        self.table = DataTable(self, columns=cols, height=7, show_inspector=False)
+        self.table.pack(side="top", fill="both", expand=True)
+
+        self.on_pick_catalog_course(course_labels[0])
+        self.on_select_student(default_lbl)
+
+    def on_pick_catalog_course(self, label: str):
+        c = self.course_map.get(label)
+        if not c:
+            return
+        self.ent_c_code.delete(0, "end")
+        self.ent_c_code.insert(0, c["course_code"])
+        self.ent_c_name.delete(0, "end")
+        self.ent_c_name.insert(0, c["course_name"])
+        self.ent_c_t.delete(0, "end")
+        self.ent_c_t.insert(0, str(c["theory_hours"]))
+        self.ent_c_p.delete(0, "end")
+        self.ent_c_p.insert(0, str(c["practice_hours"]))
+        self.ent_c_cr.delete(0, "end")
+        self.ent_c_cr.insert(0, str(c["credits"]))
+
+    def on_select_student(self, label: str):
+        stu = self.student_map.get(label)
+        if not stu:
+            return
+        self.ent_code.delete(0, "end")
+        self.ent_code.insert(0, stu.get("student_code", ""))
+        self.ent_name.delete(0, "end")
+        self.ent_name.insert(0, stu.get("full_name", ""))
+        cls_val = stu.get("class_group", "ปวช.1/2")
+        if cls_val == "ปวช.1" and stu.get("student_code") == "69219100049":
+            cls_val = "ปวช. 1/2"
+        self.ent_cls.delete(0, "end")
+        self.ent_cls.insert(0, cls_val)
+        self.ent_major.delete(0, "end")
+        self.ent_major.insert(0, stu.get("major", "เทคโนโลยีธุรกิจดิจิทัล"))
+
+        self.registered_courses = self.db.get_student_registered_courses(stu["student_code"])
+        self.refresh_table_ui()
+
+    def load_default_ex_courses(self):
+        self.registered_courses = [dict(c) for c in self.db.get_course_catalog()]
+        self.refresh_table_ui()
+
+    def add_course_to_table(self):
+        ccode = self.ent_c_code.get().strip()
+        cname = self.ent_c_name.get().strip()
+        if not ccode or not cname:
+            messagebox.showwarning("ระบุข้อมูลวิชา", "กรุณากรอกรหัสวิชาและชื่อวิชา")
+            return
+        try:
+            th = int(float(self.ent_c_t.get().strip() or "0"))
+            pr = int(float(self.ent_c_p.get().strip() or "0"))
+            cr = int(float(self.ent_c_cr.get().strip() or "0"))
+        except ValueError:
+            messagebox.showwarning("ตัวเลขไม่ถูกต้อง", "กรุณากรอก ท., ป., นก. เป็นตัวเลข")
+            return
+
+        self.registered_courses.append(
+            {
+                "course_code": ccode,
+                "course_name": cname,
+                "theory_hours": th,
+                "practice_hours": pr,
+                "credits": cr,
+            }
+        )
+        self.db.upsert_course_catalog(ccode, cname, th, pr, cr, self.ent_major.get().strip(), self.ent_cls.get().strip())
+        self.refresh_table_ui()
+
+    def remove_selected_course(self):
+        vals = self.table.get_selected_values()
+        if not vals:
+            if self.registered_courses:
+                self.registered_courses.pop()
+                self.refresh_table_ui()
+            return
+        try:
+            idx = int(vals[0]) - 1
+            if 0 <= idx < len(self.registered_courses):
+                self.registered_courses.pop(idx)
+                self.refresh_table_ui()
+        except Exception:
+            pass
+
+    def refresh_table_ui(self):
+        rows = []
+        tot_t, tot_p, tot_c = 0, 0, 0
+        for idx, c in enumerate(self.registered_courses, start=1):
+            t_v = int(float(c.get("theory_hours", 0)))
+            p_v = int(float(c.get("practice_hours", 0)))
+            c_v = int(float(c.get("credits", 0)))
+            tot_t += t_v
+            tot_p += p_v
+            tot_c += c_v
+            rows.append(
+                (
+                    [
+                        str(idx),
+                        str(c.get("course_code", "")),
+                        str(c.get("course_name", "")),
+                        str(t_v),
+                        str(p_v),
+                        str(c_v),
+                    ],
+                    "PAID",
+                )
+            )
+        self.table.set_rows(rows)
+        self.lbl_totals.configure(
+            text=f"รวมชั่วโมง/หน่วยกิต ({len(self.registered_courses)} วิชา): ท. {tot_t}  |  ป. {tot_p}  |  นก. {tot_c}   •   ค่าธรรมเนียมการศึกษา: ฿1,130.00 บาท"
+        )
+
+    def save_and_export_registration_card(self):
+        stu_code = self.ent_code.get().strip()
+        stu_name = self.ent_name.get().strip()
+        if not stu_code or not stu_name:
+            messagebox.showwarning("เลือกนักศึกษา", "กรุณาเลือกนักศึกษาก่อนพิมพ์บัตรลงทะเบียนรายวิชา")
+            return
+
+        self.db.save_student_registered_courses(
+            student_code=stu_code,
+            term_code=self.config.get("current_semester", "2/2569"),
+            courses_list=self.registered_courses,
+            actor=self.session.username,
+            role=self.session.role,
+        )
+
+        out_dir = self.config.get("default_export_folder", os.getcwd())
+        os.makedirs(out_dir, exist_ok=True)
+        default_fn = f"CourseReg_OST28_{stu_code}.pdf"
+
+        save_path = filedialog.asksaveasfilename(
+            title="เลือกตำแหน่งบันทึกบัตรลงทะเบียนรายวิชา อศท.28 (.pdf / .docx)",
+            initialdir=out_dir,
+            initialfile=default_fn,
+            defaultextension=".pdf",
+            filetypes=[
+                ("PDF Document (*.pdf)", "*.pdf"),
+                ("Word Document (*.docx)", "*.docx"),
+            ],
+        )
+        if not save_path:
+            return
+
+        payload = {
+            "report_type": "COURSE_REGISTRATION",
+            "student_code": stu_code,
+            "full_name": stu_name,
+            "class_group": self.ent_cls.get().strip() or "ปวช. 1/2",
+            "fiscal_year": self.ent_year.get().strip() or "2569",
+            "major": self.ent_major.get().strip() or "เทคโนโลยีธุรกิจดิจิทัล",
+            "subject_type": self.ent_subj_type.get().strip() or "อุตสาหกรรมดิจิทัลและเทคโนโลยีสารสนเทศ",
+            "career_group": self.ent_career.get().strip() or "ธุรกิจดิจิทัลและพาณิชย์อิเล็กทรอนิกส์",
+            "courses": self.registered_courses,
+            "fee_items": [
+                {"item_name": "ค่าใช้บริการอินเตอร์เน็ต", "line_total": 300.0},
+                {"item_name": "ค่าจ้างครูหรือผู้ที่มีความเชี่ยวชาญในสาขาเฉพาะ", "line_total": 500.0},
+                {"item_name": "ค่ารักษาสภาพแวดล้อม", "line_total": 330.0},
+            ],
+        }
+
+        export_document_auto(
+            save_path,
+            payload,
+            college_name=self.config.get("college_name", "วิทยาลัยอาชีวศึกษาสุพรรณบุรี"),
+            metadata=self.config,
+            is_batch=False,
+        )
+        messagebox.showinfo(
+            "พิมพ์บัตรลงทะเบียนรายวิชาสำเร็จ",
+            f"บันทึกไฟล์บัตรลงทะเบียนรายวิชา (อศท.28) ของ {stu_name} เรียบร้อยที่:\n{save_path}",
+        )
+

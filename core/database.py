@@ -5,7 +5,7 @@ import os
 import sqlite3
 from typing import Any, Dict, List, Optional, Tuple
 
-from core.config import format_thai_date_short, thai_baht_text
+from core.config import format_receipt_date_thai, format_thai_date_short, thai_baht_text
 from core.security import SecurityManager
 
 try:
@@ -182,12 +182,37 @@ class DatabaseManager:
                     curr_hash TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS course_catalog (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    course_code TEXT UNIQUE NOT NULL,
+                    course_name TEXT NOT NULL,
+                    theory_hours INTEGER NOT NULL DEFAULT 0,
+                    practice_hours INTEGER NOT NULL DEFAULT 2,
+                    credits INTEGER NOT NULL DEFAULT 1,
+                    major TEXT NOT NULL DEFAULT 'เทคโนโลยีธุรกิจดิจิทัล',
+                    class_level TEXT NOT NULL DEFAULT 'ปวช.1',
+                    sort_order INTEGER DEFAULT 10
+                );
+
+                CREATE TABLE IF NOT EXISTS student_course_registrations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    student_code TEXT NOT NULL,
+                    term_code TEXT NOT NULL DEFAULT '2/2569',
+                    line_no INTEGER NOT NULL DEFAULT 1,
+                    course_code TEXT NOT NULL,
+                    course_name TEXT NOT NULL,
+                    theory_hours INTEGER NOT NULL DEFAULT 0,
+                    practice_hours INTEGER NOT NULL DEFAULT 2,
+                    credits INTEGER NOT NULL DEFAULT 1
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_master_options_cat ON master_options(category, sort_order);
                 CREATE INDEX IF NOT EXISTS idx_students_code_name ON students(student_code, full_name, class_group, status);
                 CREATE INDEX IF NOT EXISTS idx_students_dept_level ON students(education_level, faculty, major);
                 CREATE INDEX IF NOT EXISTS idx_receipts_no_date ON receipts(receipt_no, receipt_date, status);
                 CREATE INDEX IF NOT EXISTS idx_receipts_student ON receipts(student_code, term_code);
                 CREATE INDEX IF NOT EXISTS idx_receipt_items_rcp ON receipt_items(receipt_id);
+                CREATE INDEX IF NOT EXISTS idx_stu_course_reg ON student_course_registrations(student_code, term_code);
                 """
             )
 
@@ -493,6 +518,95 @@ class DatabaseManager:
                             """,
                             (rcp_id, ln, f_code, curr_n, i_name, qty, u_price, disc, l_tot),
                         )
+
+            # Ensure EXofBill reference data (69219100049 / Receipt 700605308) exists
+            conn.executemany(
+                "INSERT OR IGNORE INTO master_options (category, option_value, sort_order) VALUES (?, ?, ?)",
+                [
+                    ("FACULTY", "พาณิชยกรรม/บริหารธุรกิจ", 1),
+                    ("DEPARTMENT", "เทคโนโลยีธุรกิจดิจิทัล", 2),
+                    ("CLASS_LEVEL", "ปวช.1", 0),
+                ],
+            )
+            ex_stu = conn.execute("SELECT id FROM students WHERE student_code = '69219100049'").fetchone()
+            if not ex_stu:
+                cur_s = conn.execute(
+                    """
+                    INSERT INTO students
+                    (student_code, full_name, citizen_id, education_level, class_group, faculty, major, year_level, scholarship_type, registered_credits, total_fee, paid_amount, status, phone)
+                    VALUES ('69219100049', 'นางสาวปรันดา เจียศิริพันธ์', '1729900999999', 'ปวช.1', 'ปวช.1', 'พาณิชยกรรม/บริหารธุรกิจ', 'เทคโนโลยีธุรกิจดิจิทัล', 1, 'เรียนฟรี 15 ปี (ปวช.)', 19, 1130.0, 1130.0, 'PAID', '')
+                    """
+                )
+                ex_stu_id = cur_s.lastrowid
+            else:
+                ex_stu_id = ex_stu["id"]
+
+            ex_rcp = conn.execute("SELECT id FROM receipts WHERE receipt_no = '700605308'").fetchone()
+            if not ex_rcp:
+                cur_r = conn.execute(
+                    """
+                    INSERT INTO receipts
+                    (receipt_no, book_no, receipt_date, term_code, student_id, student_code,
+                     snapshot_student_name, snapshot_education_level, snapshot_class_group, snapshot_department, snapshot_major,
+                     subtotal_amount, discount_amount, net_total_amount, amount_text_th,
+                     payment_method, payment_ref, evidence_path, cashier_username, cashier_name, cashier_position, status, remark)
+                    VALUES ('700605308', '7006', '2026-10-30', '2/2569', ?, '69219100049',
+                            'นางสาวปรันดา เจียศิริพันธ์', 'ปวช.1', 'ปวช.1', 'พาณิชยกรรม/บริหารธุรกิจ', 'เทคโนโลยีธุรกิจดิจิทัล',
+                            1130.0, 0.0, 1130.0, ?, 'เงินสด (Cash)', '', '', 'admin', 'นางสาวสุพรรณี ศรีอาชีวะ', 'ครู', 'ISSUED', '')
+                    """,
+                    (ex_stu_id, thai_baht_text(1130.0)),
+                )
+                ex_rcp_id = cur_r.lastrowid
+                ex_items = [
+                    (1, "SPVC-06", "หลักสูตรในระบบ-ปวช", "ค่ารักษาสภาพแวดล้อม", 1.0, 330.0, 0.0, 330.0),
+                    (2, "SPVC-07", "หลักสูตรในระบบ-ปวช", "ค่าใช้บริการอินเตอร์เน็ต", 1.0, 300.0, 0.0, 300.0),
+                    (3, "SPVC-08", "หลักสูตรในระบบ-ปวช", "ค่าจ้างครูหรือผู้ที่มีความเชี่ยวชาญในสาขาเฉพาะ", 1.0, 500.0, 0.0, 500.0),
+                ]
+                conn.executemany(
+                    """
+                    INSERT INTO receipt_items
+                    (receipt_id, line_no, fee_code, curriculum_name, item_name, quantity, unit_price, discount, line_total)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [(ex_rcp_id, *it) for it in ex_items],
+                )
+
+            # Seed the 11 Official Courses from EXofBill (อศท.28)
+            ex_courses = [
+                ("20000-1102", "ภาษาไทยเพื่ออาชีพ", 0, 2, 1, "เทคโนโลยีธุรกิจดิจิทัล", "ปวช.1", 1),
+                ("20000-1203", "การฟังและการพูดภาษาอังกฤษ", 0, 2, 1, "เทคโนโลยีธุรกิจดิจิทัล", "ปวช.1", 2),
+                ("20000-1222", "ภาษาจีนเพื่อการสื่อสารในชีวิตประจำวัน", 0, 2, 1, "เทคโนโลยีธุรกิจดิจิทัล", "ปวช.1", 3),
+                ("20000-1501", "หน้าที่พลเมืองและศีลธรรม", 2, 0, 2, "เทคโนโลยีธุรกิจดิจิทัล", "ปวช.1", 4),
+                ("20001-1003", "ธุรกิจเบื้องต้น", 1, 2, 2, "เทคโนโลยีธุรกิจดิจิทัล", "ปวช.1", 5),
+                ("20001-1005", "การใช้เทคโนโลยีดิจิทัลเพื่ออาชีพ", 2, 2, 3, "เทคโนโลยีธุรกิจดิจิทัล", "ปวช.1", 6),
+                ("21910-2004", "โปรแกรมประมวลผลคำ", 1, 2, 2, "เทคโนโลยีธุรกิจดิจิทัล", "ปวช.1", 7),
+                ("21910-2005", "โปรแกรมตารางคำนวณ", 1, 2, 2, "เทคโนโลยีธุรกิจดิจิทัล", "ปวช.1", 8),
+                ("21910-2006", "โปรแกรมนำเสนอ", 2, 2, 3, "เทคโนโลยีธุรกิจดิจิทัล", "ปวช.1", 9),
+                ("21910-2009", "คณิตศาสตร์คอมพิวเตอร์", 1, 2, 2, "เทคโนโลยีธุรกิจดิจิทัล", "ปวช.1", 10),
+                ("20000-2002", "กิจกรรมลูกเสือวิสามัญ 2", 0, 2, 0, "เทคโนโลยีธุรกิจดิจิทัล", "ปวช.1", 11),
+            ]
+            conn.executemany(
+                """
+                INSERT OR IGNORE INTO course_catalog
+                (course_code, course_name, theory_hours, practice_hours, credits, major, class_level, sort_order)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                ex_courses,
+            )
+
+            reg_cnt = conn.execute(
+                "SELECT COUNT(*) as c FROM student_course_registrations WHERE student_code = '69219100049'"
+            ).fetchone()["c"]
+            if reg_cnt == 0:
+                for ln_idx, (ccode, cname, th, pr, cr, _mj, _cl, _so) in enumerate(ex_courses, start=1):
+                    conn.execute(
+                        """
+                        INSERT INTO student_course_registrations
+                        (student_code, term_code, line_no, course_code, course_name, theory_hours, practice_hours, credits)
+                        VALUES ('69219100049', '2/2569', ?, ?, ?, ?, ?, ?)
+                        """,
+                        (ln_idx, ccode, cname, th, pr, cr),
+                    )
             conn.commit()
 
         with self._connect() as conn:
@@ -584,54 +698,26 @@ class DatabaseManager:
         ]
 
     # ------------------------------------------------------------------
-    # Receipt Numbering (Start - End Range like EX: 700605433 to 700611000)
+    # Receipt Numbering (Start - End Range like EX: 700605433 to 700999999)
     # ------------------------------------------------------------------
-    def get_next_receipt_no(self, prefix: str = "", start_no: str = "700605433", end_no: str = "700611000") -> str:
+    def get_next_receipt_no(self, prefix: str = "", start_no: str = "700605433", end_no: str = "700999999") -> str:
         start_clean = (start_no or "700605433").strip()
-        with self._connect() as conn:
-            rows = conn.execute("SELECT receipt_no FROM receipts ORDER BY id DESC LIMIT 50").fetchall()
-
         if start_clean.isdigit():
             start_int = int(start_clean)
-            max_seen = start_int - 1
-            for r in rows:
-                rno = str(r["receipt_no"]).strip()
-                if rno.isdigit():
-                    val = int(rno)
-                    if val > max_seen:
-                        max_seen = val
+            with self._connect() as conn:
+                max_row = conn.execute(
+                    "SELECT MAX(CAST(receipt_no AS INTEGER)) as max_no FROM receipts WHERE receipt_no GLOB '[0-9]*'"
+                ).fetchone()
+            max_seen = int(max_row["max_no"]) if (max_row and max_row["max_no"] is not None) else (start_int - 1)
             next_int = max(start_int, max_seen + 1)
             return str(next_int)
 
         clean_prefix = (prefix or "SPVC69").strip()
-        cnt = len(rows)
+        with self._connect() as conn:
+            cnt = conn.execute("SELECT COUNT(*) as c FROM receipts").fetchone()["c"]
         return f"{clean_prefix}-{cnt + 1:05d}"
 
-    def issue_flexible_receipt(
-        self,
-        student_code: str,
-        line_items: List[Dict[str, Any]],
-        payment_method: str,
-        actor: str,
-        cashier_name: str,
-        role: str = "FINANCE",
-        term_code: str = "1/2569",
-        book_no: str = "7006",
-        receipt_prefix: str = "",
-        receipt_no_override: str = "",
-        receipt_date_override: str = "",
-        cashier_position: str = "ครู",
-        payment_ref: str = "",
-        evidence_path: str = "",
-        remark: str = "",
-        update_tuition_balance: bool = True,
-        custom_payer_name: str = "",
-        custom_faculty: str = "",
-        custom_major: str = "",
-        custom_class_group: str = "",
-        start_no: str = "700605433",
-        end_no: str = "700611000",
-    ) -> Dict[str, Any]:
+    def _normalize_line_items(self, line_items: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], float, float, float]:
         if not line_items:
             raise ValueError("กรุณาเพิ่มรายการค่าธรรมเนียมในใบเสร็จอย่างน้อย 1 รายการ")
 
@@ -669,11 +755,40 @@ class DatabaseManager:
         if net_total <= 0:
             raise ValueError("ยอดรวมเป็นเงินในใบเสร็จต้องมากกว่า 0.00 บาท")
 
+        return normalized_items, subtotal, total_discount, net_total
+
+    def issue_flexible_receipt(
+        self,
+        student_code: str,
+        line_items: List[Dict[str, Any]],
+        payment_method: str,
+        actor: str,
+        cashier_name: str,
+        role: str = "FINANCE",
+        term_code: str = "1/2569",
+        book_no: str = "7006",
+        receipt_prefix: str = "",
+        receipt_no_override: str = "",
+        receipt_date_override: str = "",
+        cashier_position: str = "ครู",
+        payment_ref: str = "",
+        evidence_path: str = "",
+        remark: str = "",
+        update_tuition_balance: bool = True,
+        custom_payer_name: str = "",
+        custom_faculty: str = "",
+        custom_major: str = "",
+        custom_class_group: str = "",
+        start_no: str = "700605433",
+        end_no: str = "700999999",
+    ) -> Dict[str, Any]:
+        normalized_items, subtotal, total_discount, net_total = self._normalize_line_items(line_items)
+
         baht_str = thai_baht_text(net_total)
         now_str = receipt_date_override.strip() if receipt_date_override.strip() else datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         receipt_no = receipt_no_override.strip() if receipt_no_override.strip() else self.get_next_receipt_no(receipt_prefix, start_no, end_no)
 
-        if receipt_no.isdigit() and end_no.strip().isdigit():
+        if receipt_no.isdigit() and end_no.strip().isdigit() and int(end_no.strip()) > 0:
             if int(receipt_no) > int(end_no.strip()):
                 raise ValueError(f"เลขที่ใบเสร็จ {receipt_no} เกินช่วงเลขที่ใบเสร็จสิ้นสุด ({end_no}) ที่ตั้งค่าไว้ กรุณาขยายช่วงเลขใบเสร็จในหน้าตั้งค่า")
 
@@ -738,13 +853,13 @@ class DatabaseManager:
             )
             receipt_id = cur.lastrowid
 
-            for it in normalized_items:
-                conn.execute(
-                    """
-                    INSERT INTO receipt_items
-                    (receipt_id, line_no, fee_code, curriculum_name, item_name, quantity, unit_price, discount, line_total)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
+            conn.executemany(
+                """
+                INSERT INTO receipt_items
+                (receipt_id, line_no, fee_code, curriculum_name, item_name, quantity, unit_price, discount, line_total)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
                     (
                         receipt_id,
                         it["line_no"],
@@ -755,8 +870,10 @@ class DatabaseManager:
                         it["unit_price"],
                         it["discount"],
                         it["line_total"],
-                    ),
-                )
+                    )
+                    for it in normalized_items
+                ],
+            )
 
             new_paid = old_paid
             new_status = "PAID"
@@ -796,10 +913,15 @@ class DatabaseManager:
             "term_code": term_code,
             "student_code": s_code,
             "full_name": s_name,
+            "snapshot_student_name": s_name,
             "education_level": s_lvl,
+            "snapshot_education_level": s_lvl,
             "class_group": s_cls,
+            "snapshot_class_group": s_cls,
             "faculty": s_dept,
+            "snapshot_department": s_dept,
             "major": s_maj,
+            "snapshot_major": s_maj,
             "subtotal_amount": subtotal,
             "discount_amount": total_discount,
             "net_total_amount": net_total,
@@ -832,37 +954,189 @@ class DatabaseManager:
         receipt_prefix: str = "",
         cashier_position: str = "ครู",
         start_no: str = "700605433",
-        end_no: str = "700611000",
+        end_no: str = "700999999",
         receipt_date_override: str = "",
     ) -> List[Dict[str, Any]]:
-        """Issues identical receipt items for a whole classroom/group of students sequentially."""
+        """Issues identical receipt items for a whole classroom/group of students inside a single atomic transaction."""
         if not students_list:
             raise ValueError("ไม่มีรายชื่อนักเรียน/นักศึกษาในกลุ่มที่เลือก")
-        if not line_items:
-            raise ValueError("กรุณาเลือกรายการค่าธรรมเนียมในใบเสร็จอย่างน้อย 1 รายการก่อนสั่งออกใบเสร็จยกห้อง")
+        normalized_items, subtotal, total_discount, net_total = self._normalize_line_items(line_items)
+        baht_str = thai_baht_text(net_total)
+        now_str = receipt_date_override.strip() if receipt_date_override.strip() else datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        issued_receipts = []
-        for stu in students_list:
-            rcp = self.issue_flexible_receipt(
-                student_code=stu["student_code"],
-                line_items=line_items,
-                payment_method=payment_method,
-                actor=actor,
-                cashier_name=cashier_name,
-                role=role,
-                term_code=term_code,
-                book_no=book_no,
-                receipt_prefix=receipt_prefix,
-                receipt_date_override=receipt_date_override,
-                cashier_position=cashier_position,
-                custom_payer_name=stu.get("full_name", ""),
-                custom_faculty=stu.get("faculty", ""),
-                custom_major=stu.get("major", ""),
-                custom_class_group=stu.get("class_group", ""),
-                start_no=start_no,
-                end_no=end_no,
+        first_no_str = self.get_next_receipt_no(receipt_prefix, start_no, end_no)
+        is_numeric_no = first_no_str.isdigit()
+        next_int = int(first_no_str) if is_numeric_no else 0
+        end_int = int(end_no.strip()) if (end_no.strip().isdigit() and int(end_no.strip()) > 0) else 0
+        clean_prefix = (receipt_prefix or "SPVC69").strip()
+
+        if is_numeric_no and end_int > 0 and (next_int + len(students_list) - 1) > end_int:
+            raise ValueError(
+                f"เลขที่ใบเสร็จจะเกินช่วงสิ้นสุด ({end_no}) ที่ตั้งค่าไว้ กรุณาขยายช่วงเลขใบเสร็จในหน้าตั้งค่า"
             )
-            issued_receipts.append(rcp)
+
+        issued_receipts: List[Dict[str, Any]] = []
+        with self._connect() as conn:
+            if not is_numeric_no:
+                base_cnt = conn.execute("SELECT COUNT(*) as c FROM receipts").fetchone()["c"]
+            else:
+                base_cnt = 0
+
+            conn.execute("BEGIN TRANSACTION;")
+            try:
+                for idx, stu_in in enumerate(students_list):
+                    if is_numeric_no:
+                        receipt_no = str(next_int + idx)
+                    else:
+                        receipt_no = f"{clean_prefix}-{base_cnt + idx + 1:05d}"
+
+                    s_code_in = str(stu_in["student_code"]).strip()
+                    stu = conn.execute("SELECT * FROM students WHERE student_code = ?", (s_code_in,)).fetchone()
+                    if stu:
+                        s_id = stu["id"]
+                        s_code = stu["student_code"]
+                        s_name = str(stu_in.get("full_name", "")).strip() or stu["full_name"]
+                        s_lvl = stu["education_level"]
+                        s_cls = str(stu_in.get("class_group", "")).strip() or stu["class_group"]
+                        s_dept = str(stu_in.get("faculty", "")).strip() or stu["faculty"]
+                        s_maj = str(stu_in.get("major", "")).strip() or stu["major"]
+                        old_paid = float(stu["paid_amount"])
+                        total_fee = float(stu["total_fee"])
+                    else:
+                        s_id = None
+                        s_code = s_code_in or "EXTERNAL"
+                        s_name = str(stu_in.get("full_name", "")).strip() or s_code
+                        s_lvl = str(stu_in.get("class_group", "")).strip() or "ปวช.1"
+                        s_cls = str(stu_in.get("class_group", "")).strip() or "ปวช.1/1"
+                        s_dept = str(stu_in.get("faculty", "")).strip() or "บริหารธุรกิจ / พาณิชยกรรม"
+                        s_maj = str(stu_in.get("major", "")).strip() or "การบัญชี"
+                        old_paid = 0.0
+                        total_fee = net_total
+
+                    cur = conn.execute(
+                        """
+                        INSERT INTO receipts
+                        (receipt_no, book_no, receipt_date, term_code, student_id, student_code,
+                         snapshot_student_name, snapshot_education_level, snapshot_class_group, snapshot_department, snapshot_major,
+                         subtotal_amount, discount_amount, net_total_amount, amount_text_th,
+                         payment_method, payment_ref, evidence_path, cashier_username, cashier_name, cashier_position, status, remark)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', ?, ?, ?, 'ISSUED', '')
+                        """,
+                        (
+                            receipt_no,
+                            book_no,
+                            now_str,
+                            term_code,
+                            s_id,
+                            s_code,
+                            s_name,
+                            s_lvl,
+                            s_cls,
+                            s_dept,
+                            s_maj,
+                            subtotal,
+                            total_discount,
+                            net_total,
+                            baht_str,
+                            payment_method,
+                            actor,
+                            cashier_name,
+                            cashier_position,
+                        ),
+                    )
+                    receipt_id = cur.lastrowid
+
+                    conn.executemany(
+                        """
+                        INSERT INTO receipt_items
+                        (receipt_id, line_no, fee_code, curriculum_name, item_name, quantity, unit_price, discount, line_total)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        [
+                            (
+                                receipt_id,
+                                it["line_no"],
+                                it["fee_code"],
+                                it["curriculum_name"],
+                                it["item_name"],
+                                it["quantity"],
+                                it["unit_price"],
+                                it["discount"],
+                                it["line_total"],
+                            )
+                            for it in normalized_items
+                        ],
+                    )
+
+                    new_paid = old_paid
+                    new_status = "PAID"
+                    new_balance = 0.0
+                    if stu:
+                        new_paid = round(old_paid + net_total, 2)
+                        if new_paid >= total_fee:
+                            new_status = "PAID"
+                        elif new_paid > 0:
+                            new_status = "PARTIAL"
+                        else:
+                            new_status = "UNPAID"
+                        new_balance = max(0.0, round(total_fee - new_paid, 2))
+                        conn.execute(
+                            "UPDATE students SET paid_amount = ?, status = ? WHERE id = ?",
+                            (new_paid, new_status, s_id),
+                        )
+
+                    issued_receipts.append(
+                        {
+                            "receipt_id": receipt_id,
+                            "receipt_no": receipt_no,
+                            "tx_code": receipt_no,
+                            "book_no": book_no,
+                            "receipt_date": now_str,
+                            "tx_date": now_str,
+                            "term_code": term_code,
+                            "student_code": s_code,
+                            "full_name": s_name,
+                            "snapshot_student_name": s_name,
+                            "education_level": s_lvl,
+                            "snapshot_education_level": s_lvl,
+                            "class_group": s_cls,
+                            "snapshot_class_group": s_cls,
+                            "faculty": s_dept,
+                            "snapshot_department": s_dept,
+                            "major": s_maj,
+                            "snapshot_major": s_maj,
+                            "subtotal_amount": subtotal,
+                            "discount_amount": total_discount,
+                            "net_total_amount": net_total,
+                            "amount": net_total,
+                            "amount_text_th": baht_str,
+                            "total_fee": total_fee,
+                            "paid_amount": new_paid,
+                            "balance": new_balance,
+                            "payment_method": payment_method,
+                            "payment_ref": "",
+                            "status": new_status,
+                            "receipt_status": "ISSUED",
+                            "recorded_by": cashier_name,
+                            "cashier_position": cashier_position,
+                            "evidence_path": "",
+                            "remark": "",
+                            "items": [dict(it) for it in normalized_items],
+                        }
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+        if issued_receipts:
+            self.log_audit(
+                actor,
+                role,
+                "RECEIPT_BATCH_ISSUED",
+                f"{issued_receipts[0]['receipt_no']}..{issued_receipts[-1]['receipt_no']}",
+                f"Batch issued {len(issued_receipts)} receipts ({net_total:,.2f} THB each).",
+            )
         return issued_receipts
 
     def record_tuition_payment(
@@ -902,34 +1176,117 @@ class DatabaseManager:
     # ------------------------------------------------------------------
     def get_distinct_receipt_dates(self) -> List[str]:
         with self._connect() as conn:
-            rows = conn.execute("SELECT DISTINCT substr(receipt_date, 1, 10) as d FROM receipts ORDER BY d DESC").fetchall()
+            rows = conn.execute("SELECT DISTINCT substr(receipt_date, 1, 10) as d FROM receipts ORDER BY d DESC LIMIT 365").fetchall()
             return [r["d"] for r in rows if r["d"]]
 
-    def get_receipts(self, status_filter: str = "ALL", search: str = "", date_prefix: str = "") -> List[Dict[str, Any]]:
-        query = "SELECT * FROM receipts WHERE 1=1"
+    def _build_receipts_where(
+        self,
+        status_filter: str = "ALL",
+        search: str = "",
+        date_prefix: str = "",
+    ) -> Tuple[str, List[Any]]:
+        where_sql = " WHERE 1=1"
         params: List[Any] = []
         if status_filter and status_filter not in ("ALL", "ทั้งหมด"):
-            query += " AND status = ?"
+            where_sql += " AND status = ?"
             params.append(status_filter)
         if date_prefix and date_prefix not in ("ALL", "ทุกวัน"):
-            query += " AND receipt_date LIKE ?"
+            where_sql += " AND receipt_date LIKE ?"
             params.append(f"%{date_prefix.strip()}%")
         if search.strip():
             q = f"%{search.strip()}%"
-            query += " AND (receipt_no LIKE ? OR student_code LIKE ? OR snapshot_student_name LIKE ? OR snapshot_class_group LIKE ? OR snapshot_department LIKE ? OR snapshot_major LIKE ?)"
+            where_sql += (
+                " AND (receipt_no LIKE ? OR student_code LIKE ? OR snapshot_student_name LIKE ?"
+                " OR snapshot_class_group LIKE ? OR snapshot_department LIKE ? OR snapshot_major LIKE ?)"
+            )
             params.extend([q, q, q, q, q, q])
-        query += " ORDER BY id DESC"
+        return where_sql, params
+
+    def get_receipts_stats(
+        self,
+        status_filter: str = "ALL",
+        search: str = "",
+        date_prefix: str = "",
+    ) -> Dict[str, Any]:
+        """Fast SQL aggregation for total count, valid ISSUED count, and net total amount across 100k+ receipts."""
+        where_sql, params = self._build_receipts_where(status_filter, search, date_prefix)
+        sql = (
+            "SELECT COUNT(*) as total_count, "
+            "COALESCE(SUM(CASE WHEN status = 'ISSUED' THEN 1 ELSE 0 END), 0) as valid_count, "
+            "COALESCE(SUM(CASE WHEN status = 'ISSUED' THEN net_total_amount ELSE 0.0 END), 0.0) as total_amount "
+            f"FROM receipts{where_sql}"
+        )
+        with self._connect() as conn:
+            row = conn.execute(sql, params).fetchone()
+        return {
+            "total_count": int(row["total_count"] or 0),
+            "valid_count": int(row["valid_count"] or 0),
+            "total_amount": round(float(row["total_amount"] or 0.0), 2),
+        }
+
+    def get_receipts(
+        self,
+        status_filter: str = "ALL",
+        search: str = "",
+        date_prefix: str = "",
+        limit: Optional[int] = None,
+        offset: int = 0,
+        include_items: bool = True,
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetches receipts with zero N+1 queries by batch-loading receipt_items in bulk.
+        Supports optional LIMIT/OFFSET pagination for instant UI rendering.
+        """
+        where_sql, params = self._build_receipts_where(status_filter, search, date_prefix)
+        query = f"SELECT * FROM receipts{where_sql} ORDER BY id DESC"
+        if limit is not None and limit > 0:
+            query += " LIMIT ? OFFSET ?"
+            params.extend([int(limit), max(0, int(offset))])
 
         with self._connect() as conn:
             rows = conn.execute(query, params).fetchall()
+            if not rows:
+                return []
+
+            items_by_rcp: Dict[int, List[Dict[str, Any]]] = {}
+            if include_items:
+                rcp_ids = [r["id"] for r in rows]
+                if len(rcp_ids) <= 900:
+                    placeholders = ",".join("?" for _ in rcp_ids)
+                    item_rows = conn.execute(
+                        f"SELECT * FROM receipt_items WHERE receipt_id IN ({placeholders}) ORDER BY receipt_id ASC, line_no ASC",
+                        rcp_ids,
+                    ).fetchall()
+                elif len(rcp_ids) <= 5000:
+                    item_rows = []
+                    for i in range(0, len(rcp_ids), 900):
+                        chunk = rcp_ids[i : i + 900]
+                        placeholders = ",".join("?" for _ in chunk)
+                        item_rows.extend(
+                            conn.execute(
+                                f"SELECT * FROM receipt_items WHERE receipt_id IN ({placeholders}) ORDER BY receipt_id ASC, line_no ASC",
+                                chunk,
+                            ).fetchall()
+                        )
+                else:
+                    # Single full scan is much faster than many IN queries when fetching >5,000 receipts
+                    rcp_id_set = set(rcp_ids)
+                    all_item_rows = conn.execute(
+                        "SELECT * FROM receipt_items ORDER BY receipt_id ASC, line_no ASC"
+                    ).fetchall()
+                    item_rows = [ir for ir in all_item_rows if ir["receipt_id"] in rcp_id_set]
+
+                for it in item_rows:
+                    rid = it["receipt_id"]
+                    if rid not in items_by_rcp:
+                        items_by_rcp[rid] = []
+                    items_by_rcp[rid].append(dict(it))
+
             result = []
             for r in rows:
                 d = dict(r)
-                items = conn.execute(
-                    "SELECT * FROM receipt_items WHERE receipt_id = ? ORDER BY line_no ASC",
-                    (d["id"],),
-                ).fetchall()
-                d["items"] = [dict(it) for it in items]
+                items = items_by_rcp.get(d["id"], [])
+                d["items"] = items
                 d["item_summary"] = ", ".join(f"{it['item_name']} ({it['line_total']:,.0f})" for it in items)
                 d["tx_code"] = d["receipt_no"]
                 d["tx_date"] = d["receipt_date"]
@@ -947,11 +1304,36 @@ class DatabaseManager:
             return result
 
     def get_receipt_by_no(self, receipt_no: str) -> Optional[Dict[str, Any]]:
-        rows = self.get_receipts(search=receipt_no)
-        for r in rows:
-            if r["receipt_no"] == receipt_no:
-                return r
-        return None
+        clean_no = (receipt_no or "").strip()
+        if not clean_no:
+            return None
+        with self._connect() as conn:
+            r = conn.execute("SELECT * FROM receipts WHERE receipt_no = ? LIMIT 1", (clean_no,)).fetchone()
+            if not r:
+                return None
+            d = dict(r)
+            items = [
+                dict(it)
+                for it in conn.execute(
+                    "SELECT * FROM receipt_items WHERE receipt_id = ? ORDER BY line_no ASC",
+                    (d["id"],),
+                ).fetchall()
+            ]
+            d["items"] = items
+            d["item_summary"] = ", ".join(f"{it['item_name']} ({it['line_total']:,.0f})" for it in items)
+            d["tx_code"] = d["receipt_no"]
+            d["tx_date"] = d["receipt_date"]
+            d["tx_type"] = "INCOME"
+            d["category"] = d["snapshot_department"]
+            d["title"] = f"{d['snapshot_student_name']} - {d['item_summary']}"
+            d["amount"] = d["net_total_amount"]
+            d["ref_code"] = d["student_code"]
+            d["recorded_by"] = d["cashier_name"]
+            d["full_name"] = d["snapshot_student_name"]
+            d["class_group"] = d["snapshot_class_group"]
+            d["faculty"] = d["snapshot_department"]
+            d["major"] = d["snapshot_major"]
+            return d
 
     def void_receipt(self, receipt_no: str, reason: str, actor: str, role: str) -> bool:
         if not reason or not reason.strip():
@@ -1056,6 +1438,84 @@ class DatabaseManager:
     # ------------------------------------------------------------------
     # Student CRUD (Create, Read, Update, Delete, + Bulk Excel/CSV Import)
     # ------------------------------------------------------------------
+    def _build_students_where(
+        self,
+        search: str = "",
+        status_filter: str = "ALL",
+        level_filter: str = "ALL",
+        dept_filter: str = "ALL",
+        major_filter: str = "ALL",
+    ) -> Tuple[str, List[Any]]:
+        where_sql = " WHERE 1=1"
+        params: List[Any] = []
+        if search.strip():
+            q = f"%{search.strip()}%"
+            where_sql += " AND (student_code LIKE ? OR full_name LIKE ? OR faculty LIKE ? OR major LIKE ? OR class_group LIKE ?)"
+            params.extend([q, q, q, q, q])
+        if status_filter and status_filter not in ("ALL", "ทั้งหมด"):
+            where_sql += " AND status = ?"
+            params.append(status_filter)
+        if level_filter and level_filter not in ("ALL", "ทุกระดับชั้น", "ทุกชั้นปี"):
+            where_sql += " AND (class_group LIKE ? OR education_level LIKE ?)"
+            params.extend([f"%{level_filter}%", f"%{level_filter}%"])
+        if dept_filter and dept_filter not in ("ALL", "ทุกคณะ", "ทุกแผนกวิชา"):
+            where_sql += " AND (faculty = ? OR major = ?)"
+            params.extend([dept_filter, dept_filter])
+        if major_filter and major_filter not in ("ALL", "ทุกสาขาวิชา", "ทุกแผนกวิชา"):
+            where_sql += " AND major = ?"
+            params.append(major_filter)
+        return where_sql, params
+
+    def count_students(
+        self,
+        search: str = "",
+        status_filter: str = "ALL",
+        level_filter: str = "ALL",
+        dept_filter: str = "ALL",
+        major_filter: str = "ALL",
+    ) -> int:
+        where_sql, params = self._build_students_where(search, status_filter, level_filter, dept_filter, major_filter)
+        with self._connect() as conn:
+            row = conn.execute(f"SELECT COUNT(*) as c FROM students{where_sql}", params).fetchone()
+            return int(row["c"] or 0)
+
+    def get_student_by_code(self, student_code: str) -> Optional[Dict[str, Any]]:
+        clean = (student_code or "").strip()
+        if not clean:
+            return None
+        with self._connect() as conn:
+            r = conn.execute("SELECT * FROM students WHERE student_code = ? LIMIT 1", (clean,)).fetchone()
+            if not r:
+                return None
+            d = dict(r)
+            d.setdefault("education_level", "ปวช.1")
+            d.setdefault("class_group", "ปวช.1/1")
+            d.setdefault("registered_credits", 20)
+            d["balance"] = max(0.0, round(float(d["total_fee"]) - float(d["paid_amount"]), 2))
+            return d
+
+    def get_students_by_codes(self, student_codes: List[str]) -> List[Dict[str, Any]]:
+        clean_codes = [str(c).strip() for c in student_codes if str(c).strip()]
+        if not clean_codes:
+            return []
+        result = []
+        with self._connect() as conn:
+            for i in range(0, len(clean_codes), 900):
+                chunk = clean_codes[i : i + 900]
+                placeholders = ",".join("?" for _ in chunk)
+                rows = conn.execute(
+                    f"SELECT * FROM students WHERE student_code IN ({placeholders}) ORDER BY student_code ASC",
+                    chunk,
+                ).fetchall()
+                for r in rows:
+                    d = dict(r)
+                    d.setdefault("education_level", "ปวช.1")
+                    d.setdefault("class_group", "ปวช.1/1")
+                    d.setdefault("registered_credits", 20)
+                    d["balance"] = max(0.0, round(float(d["total_fee"]) - float(d["paid_amount"]), 2))
+                    result.append(d)
+        return result
+
     def get_students(
         self,
         search: str = "",
@@ -1063,26 +1523,14 @@ class DatabaseManager:
         level_filter: str = "ALL",
         dept_filter: str = "ALL",
         major_filter: str = "ALL",
+        limit: Optional[int] = None,
+        offset: int = 0,
     ) -> List[Dict[str, Any]]:
-        query = "SELECT * FROM students WHERE 1=1"
-        params: List[Any] = []
-        if search.strip():
-            q = f"%{search.strip()}%"
-            query += " AND (student_code LIKE ? OR full_name LIKE ? OR faculty LIKE ? OR major LIKE ? OR class_group LIKE ?)"
-            params.extend([q, q, q, q, q])
-        if status_filter and status_filter not in ("ALL", "ทั้งหมด"):
-            query += " AND status = ?"
-            params.append(status_filter)
-        if level_filter and level_filter not in ("ALL", "ทุกระดับชั้น", "ทุกชั้นปี"):
-            query += " AND (class_group LIKE ? OR education_level LIKE ?)"
-            params.extend([f"%{level_filter}%", f"%{level_filter}%"])
-        if dept_filter and dept_filter not in ("ALL", "ทุกคณะ", "ทุกแผนกวิชา"):
-            query += " AND (faculty = ? OR major = ?)"
-            params.extend([dept_filter, dept_filter])
-        if major_filter and major_filter not in ("ALL", "ทุกสาขาวิชา", "ทุกแผนกวิชา"):
-            query += " AND major = ?"
-            params.append(major_filter)
-        query += " ORDER BY student_code ASC"
+        where_sql, params = self._build_students_where(search, status_filter, level_filter, dept_filter, major_filter)
+        query = f"SELECT * FROM students{where_sql} ORDER BY student_code ASC"
+        if limit is not None and limit > 0:
+            query += " LIMIT ? OFFSET ?"
+            params.extend([int(limit), max(0, int(offset))])
 
         with self._connect() as conn:
             rows = conn.execute(query, params).fetchall()
@@ -1231,6 +1679,9 @@ class DatabaseManager:
         inserted = 0
         updated = 0
         imported_codes: List[str] = []
+        seen_faculties = set()
+        seen_majors = set()
+        seen_classes = set()
 
         with self._connect() as conn:
             conn.execute("BEGIN TRANSACTION;")
@@ -1278,9 +1729,28 @@ class DatabaseManager:
                         inserted += 1
 
                     imported_codes.append(code)
-                    conn.execute("INSERT OR IGNORE INTO master_options (category, option_value) VALUES ('FACULTY', ?)", (fac,))
-                    conn.execute("INSERT OR IGNORE INTO master_options (category, option_value) VALUES ('DEPARTMENT', ?)", (maj,))
-                    conn.execute("INSERT OR IGNORE INTO master_options (category, option_value) VALUES ('CLASS_LEVEL', ?)", (cls_grp,))
+                    if fac:
+                        seen_faculties.add(fac)
+                    if maj:
+                        seen_majors.add(maj)
+                    if cls_grp:
+                        seen_classes.add(cls_grp)
+
+                if seen_faculties:
+                    conn.executemany(
+                        "INSERT OR IGNORE INTO master_options (category, option_value) VALUES ('FACULTY', ?)",
+                        [(f,) for f in seen_faculties],
+                    )
+                if seen_majors:
+                    conn.executemany(
+                        "INSERT OR IGNORE INTO master_options (category, option_value) VALUES ('DEPARTMENT', ?)",
+                        [(m,) for m in seen_majors],
+                    )
+                if seen_classes:
+                    conn.executemany(
+                        "INSERT OR IGNORE INTO master_options (category, option_value) VALUES ('CLASS_LEVEL', ?)",
+                        [(c,) for c in seen_classes],
+                    )
                 conn.commit()
             except Exception:
                 conn.rollback()
@@ -1311,3 +1781,93 @@ class DatabaseManager:
 
     def get_budgets(self) -> List[Dict[str, Any]]:
         return []
+
+    # ------------------------------------------------------------------
+    # Course Registration (บัตรลงทะเบียนรายวิชา อศท.28)
+    # ------------------------------------------------------------------
+    def get_course_catalog(self) -> List[Dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT * FROM course_catalog ORDER BY sort_order ASC, id ASC").fetchall()
+            return [dict(r) for r in rows]
+
+    def upsert_course_catalog(
+        self,
+        course_code: str,
+        course_name: str,
+        theory_hours: int = 0,
+        practice_hours: int = 2,
+        credits: int = 1,
+        major: str = "เทคโนโลยีธุรกิจดิจิทัล",
+        class_level: str = "ปวช.1",
+        actor: str = "admin",
+        role: str = "ADMIN",
+    ) -> bool:
+        code = (course_code or "").strip()
+        name = (course_name or "").strip()
+        if not code or not name:
+            raise ValueError("กรุณากรอกรหัสวิชาและชื่อวิชา")
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO course_catalog (course_code, course_name, theory_hours, practice_hours, credits, major, class_level)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(course_code) DO UPDATE SET
+                    course_name = excluded.course_name,
+                    theory_hours = excluded.theory_hours,
+                    practice_hours = excluded.practice_hours,
+                    credits = excluded.credits,
+                    major = excluded.major,
+                    class_level = excluded.class_level
+                """,
+                (code, name, int(theory_hours), int(practice_hours), int(credits), major.strip(), class_level.strip()),
+            )
+            conn.commit()
+        self.log_audit(actor, role, "COURSE_UPSERT", code, f"Saved course {code} {name} ({theory_hours}-{practice_hours}-{credits})")
+        return True
+
+    def get_student_registered_courses(self, student_code: str, term_code: str = "2/2569") -> List[Dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM student_course_registrations WHERE student_code = ? ORDER BY line_no ASC, id ASC",
+                (student_code.strip(),),
+            ).fetchall()
+            if rows:
+                return [dict(r) for r in rows]
+            # Default fallback to the 11 SPVC courses from EXofBill so any selected student has a ready template
+            cat = conn.execute("SELECT * FROM course_catalog ORDER BY sort_order ASC, id ASC").fetchall()
+            return [dict(c) for c in cat]
+
+    def save_student_registered_courses(
+        self,
+        student_code: str,
+        term_code: str,
+        courses_list: List[Dict[str, Any]],
+        actor: str = "admin",
+        role: str = "ADMIN",
+    ) -> bool:
+        code = (student_code or "").strip()
+        if not code:
+            raise ValueError("กรุณาเลือกนักศึกษา")
+        with self._connect() as conn:
+            conn.execute("DELETE FROM student_course_registrations WHERE student_code = ?", (code,))
+            for idx, c in enumerate(courses_list, start=1):
+                conn.execute(
+                    """
+                    INSERT INTO student_course_registrations
+                    (student_code, term_code, line_no, course_code, course_name, theory_hours, practice_hours, credits)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        code,
+                        (term_code or "2/2569").strip(),
+                        idx,
+                        str(c.get("course_code", "")).strip(),
+                        str(c.get("course_name", "")).strip(),
+                        int(float(c.get("theory_hours", 0))),
+                        int(float(c.get("practice_hours", 0))),
+                        int(float(c.get("credits", 0))),
+                    ),
+                )
+            conn.commit()
+        self.log_audit(actor, role, "COURSE_REGISTER", code, f"Registered {len(courses_list)} courses for {code}")
+        return True

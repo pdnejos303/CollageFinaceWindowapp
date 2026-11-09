@@ -17,7 +17,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "receipt_book_no": "7006",
     "receipt_prefix": "",
     "receipt_no_start": "700605433",
-    "receipt_no_end": "700611000",
+    "receipt_no_end": "700999999",
     "db_engine": "sqlite",
     "database_url": "",
     "webhook_url": "",
@@ -79,10 +79,68 @@ def thai_baht_text(amount: float) -> str:
 
 
 def format_thai_date_short(dt: datetime.date = None) -> str:
-    """Returns Thai Buddhist date in D/M/YYYY format matching EX (e.g., '6/11/2569')."""
+    """Returns Thai Buddhist date in D/M/YYYY format matching EX (e.g., '30/10/2569')."""
     d = dt or datetime.date.today()
     byear = d.year + 543 if d.year < 2400 else d.year
     return f"{d.day}/{d.month}/{byear}"
+
+
+def format_receipt_date_thai(raw_date: Any = None) -> str:
+    """Converts any date string (ISO YYYY-MM-DD or DD/MM/YYYY) into Thai Buddhist DD/MM/YYYY (e.g. '30/10/2569')."""
+    if not raw_date:
+        return format_thai_date_short()
+    s = str(raw_date).strip()
+    if not s or s == "-":
+        return format_thai_date_short()
+    date_part = s.split(" ")[0].strip()
+    try:
+        if "-" in date_part:
+            parts = date_part.split("-")
+            if len(parts) == 3:
+                y, m, d = int(parts[0]), int(parts[1]), int(parts[2])
+                byear = y + 543 if y < 2400 else y
+                return f"{d}/{m}/{byear}"
+        if "/" in date_part:
+            parts = [p.strip() for p in date_part.split("/") if p.strip()]
+            if len(parts) == 3:
+                d, m, y = int(parts[0]), int(parts[1]), int(parts[2])
+                if y < 100:
+                    y += 2500
+                elif y < 2400:
+                    y += 543
+                return f"{d}/{m}/{y}"
+    except Exception:
+        pass
+    return s
+
+
+def get_garuda_emblem_path(base_dir: str = None) -> str:
+    """Returns the path to the Garuda emblem image for official receipts, extracting it from EXofBill if needed."""
+    base = base_dir or get_base_dir()
+    garuda_path = os.path.join(base, "data", "garuda_emblem.png")
+    if os.path.exists(garuda_path):
+        return garuda_path
+    ex_bill_img = os.path.join(base, "EX", "EXofBill", "95b999ca-2a23-4412-bbee-a3b29b8aa4e6.jpeg")
+    if os.path.exists(ex_bill_img):
+        try:
+            from PIL import Image, ImageOps
+            os.makedirs(os.path.dirname(garuda_path), exist_ok=True)
+            im = Image.open(ex_bill_img)
+            w, h = im.size
+            crop_box = (int(w * 0.425), int(h * 0.038), int(w * 0.568), int(h * 0.132))
+            garuda = im.crop(crop_box).convert("L")
+            garuda = ImageOps.autocontrast(garuda, cutoff=2)
+            garuda = garuda.point(lambda p: 255 if p > 185 else int(p * 0.72))
+            inv = ImageOps.invert(garuda)
+            bbox = inv.getbbox()
+            if bbox:
+                garuda = garuda.crop(bbox)
+                garuda = ImageOps.expand(garuda, border=8, fill=255)
+            garuda.save(garuda_path)
+            return garuda_path
+        except Exception:
+            pass
+    return ""
 
 
 def get_base_dir() -> str:

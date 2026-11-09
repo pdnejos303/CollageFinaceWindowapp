@@ -143,6 +143,92 @@ class TestSPVCSmartReceiptSystem(unittest.TestCase):
         restored = restore_database(bk, self.db_path)
         self.assertEqual(restored, self.db_path)
 
+    def test_high_volume_pagination_and_no_n_plus_1_queries(self):
+        csv_path = os.path.join(self.temp_dir, "bulk_250.csv")
+        with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["รหัสนักศึกษา", "ชื่อ-นามสกุล", "บัตรประชาชน", "คณะ", "สาขา", "ชั้นปี", "สิทธิ", "ค่าเทอม", "โทร", "ระดับ", "ห้อง"])
+            for i in range(1, 251):
+                writer.writerow([f"6988{i:04d}", f"นักศึกษาคนที่ {i}", f"17299{i:08d}", "บริหารธุรกิจ / พาณิชยกรรม", "การบัญชี", "1", "ปกติ", "950", "", "ปวช.1", "ปวช.1/99"])
+
+        imp = self.db.bulk_import_students(csv_path, actor="admin", role="ADMIN")
+        self.assertEqual(imp["total"], 250)
+
+        total_in_room = self.db.count_students(level_filter="ปวช.1/99")
+        self.assertEqual(total_in_room, 250)
+
+        page1 = self.db.get_students(level_filter="ปวช.1/99", limit=100, offset=0)
+        page2 = self.db.get_students(level_filter="ปวช.1/99", limit=100, offset=100)
+        page3 = self.db.get_students(level_filter="ปวช.1/99", limit=100, offset=200)
+        self.assertEqual(len(page1), 100)
+        self.assertEqual(len(page2), 100)
+        self.assertEqual(len(page3), 50)
+
+        stu_single = self.db.get_student_by_code("69880125")
+        self.assertIsNotNone(stu_single)
+        self.assertEqual(stu_single["full_name"], "นักศึกษาคนที่ 125")
+
+        by_codes = self.db.get_students_by_codes(imp["student_codes"])
+        self.assertEqual(len(by_codes), 250)
+
+        items = [
+            {"fee_code": "SPVC-05", "item_name": "เงินรายได้สถานศึกษา", "quantity": 1, "unit_price": 300.0, "discount": 0.0}
+        ]
+        batch_rcps = self.db.issue_batch_class_receipts(
+            students_list=by_codes,
+            line_items=items,
+            payment_method="เงินสด (Cash)",
+            actor="admin",
+            cashier_name="ครูการเงิน",
+            start_no="700606000",
+            end_no="700999999",
+        )
+        self.assertEqual(len(batch_rcps), 250)
+        self.assertEqual(batch_rcps[0]["receipt_no"], "700606000")
+        self.assertEqual(batch_rcps[-1]["receipt_no"], "700606249")
+        self.assertEqual(self.db.get_next_receipt_no(start_no="700605433", end_no="700999999"), "700606250")
+
+        stats = self.db.get_receipts_stats(search="นักศึกษาคนที่")
+        self.assertEqual(stats["total_count"], 250)
+        self.assertEqual(stats["valid_count"], 250)
+        self.assertEqual(stats["total_amount"], 250 * 300.0)
+
+        rcp_page1 = self.db.get_receipts(search="นักศึกษาคนที่", limit=100, offset=0)
+        self.assertEqual(len(rcp_page1), 100)
+        self.assertEqual(len(rcp_page1[0]["items"]), 1)
+
+        rcp_exact = self.db.get_receipt_by_no("700606249")
+        self.assertIsNotNone(rcp_exact)
+        self.assertEqual(rcp_exact["student_code"], "69880250")
+
+    def test_course_registration_card_ost28_export(self):
+        catalog = self.db.get_course_catalog()
+        self.assertGreaterEqual(len(catalog), 11)
+
+        courses = self.db.get_student_registered_courses("69219100049", "1/2569")
+        self.assertEqual(len(courses), 11)
+        self.assertEqual(sum(int(c["theory_hours"]) for c in courses), 10)
+        self.assertEqual(sum(int(c["practice_hours"]) for c in courses), 20)
+        self.assertEqual(sum(int(c["credits"]) for c in courses), 19)
+
+        stu = self.db.get_student_by_code("69219100049")
+        rcp = self.db.get_receipt_by_no("700605308")
+        reg_payload = {
+            "report_type": "COURSE_REGISTRATION",
+            "student": stu,
+            "academic_year": "1/2569",
+            "courses": courses,
+            "fee_items": rcp["items"],
+            "total_amount": rcp["net_total_amount"],
+            "baht_text": rcp["amount_text_th"],
+        }
+        out_pdf = os.path.join(self.temp_dir, "ost28.pdf")
+        out_docx = os.path.join(self.temp_dir, "ost28.docx")
+        PdfReceiptExporter(out_pdf).export(reg_payload)
+        DocxReceiptExporter(out_docx).export(reg_payload)
+        self.assertTrue(os.path.exists(out_pdf))
+        self.assertTrue(os.path.exists(out_docx))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -8,7 +8,7 @@
     "receipt_book_no": "7006",
     "receipt_prefix": "",
     "receipt_no_start": "700605433",
-    "receipt_no_end": "700611000",
+    "receipt_no_end": "700999999",
     "db_engine": "sqlite",
     "database_url": "",
     "webhook_url": "",

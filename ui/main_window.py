@@ -7,6 +7,7 @@ from core.models import UserSession
 from exporters.webhook_exporter import FinanceWebhookDispatcher
 from ui.theme import AppTheme
 from ui.views import (
+    CourseRegistrationView,
     ReceiptRegisterView,
     SettingsAndBackupView,
     SmartReceiptPOSView,
@@ -116,12 +117,13 @@ class MainWindow:
         )
         self.opt_cashier.pack(fill="x")
 
-        # 4 Main Navigation Menus
+        # 5 Main Navigation Menus
         nav_items = [
             ("pos", "1. ออกใบเสร็จรับเงิน"),
-            ("students", "2. รายชื่อนักศึกษา"),
-            ("receipts", "3. ประวัติ & ยกเลิกใบเสร็จ"),
-            ("settings", "4. ตั้งค่าระบบ"),
+            ("registration", "2. บัตรลงทะเบียนวิชา (อศท.28)"),
+            ("students", "3. รายชื่อนักศึกษา"),
+            ("receipts", "4. ประวัติ & ยกเลิกใบเสร็จ"),
+            ("settings", "5. ตั้งค่าระบบ"),
         ]
 
         for key, label in nav_items:
@@ -187,6 +189,8 @@ class MainWindow:
 
         if tab_key == "pos":
             self.current_view = SmartReceiptPOSView(self.content_area, self.db, self.session, self.config, self.webhook)
+        elif tab_key == "registration":
+            self.current_view = CourseRegistrationView(self.content_area, self.db, self.session, self.config)
         elif tab_key == "students":
             self.current_view = StudentAndFeeCatalogView(self.content_area, self.db, self.session, self.config)
         elif tab_key == "receipts":

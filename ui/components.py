@@ -108,8 +108,9 @@ class SectionHeader(ctk.CTkFrame):
 
 class DataTable(ctk.CTkFrame):
     """
-    Harmonious, Enterprise-Grade Table.
-    Soft Slate-100 header, subtle zebra rows, and calm ice-blue selection highlight.
+    Harmonious, Enterprise-Grade Table with Built-in Pagination Support.
+    Soft Slate-100 header, subtle zebra rows, calm ice-blue selection highlight,
+    and automatic/server-side pagination for 100,000+ rows.
     """
 
     def __init__(
@@ -119,6 +120,9 @@ class DataTable(ctk.CTkFrame):
         height: int = 6,
         on_select: Optional[Callable[[List[str]], None]] = None,
         show_inspector: bool = False,
+        page_size: int = 100,
+        on_page_change: Optional[Callable[[int], None]] = None,
+        show_pagination: bool = False,
     ):
         super().__init__(
             parent,
@@ -129,6 +133,13 @@ class DataTable(ctk.CTkFrame):
         )
         self.on_select = on_select
         self.columns_meta = columns
+        self.page_size = max(10, int(page_size))
+        self.on_page_change = on_page_change
+        self.show_pagination = show_pagination
+        self.current_page = 1
+        self.total_count = 0
+        self.total_pages = 1
+        self._client_rows: List[Tuple[List[str], str]] = []
 
         style = ttk.Style()
         try:
@@ -163,6 +174,87 @@ class DataTable(ctk.CTkFrame):
             "GodApp.Treeview.Heading",
             background=[("active", "#E2E8F0")],
         )
+
+        # Optional Pagination Footer Bar
+        self.pagination_bar = ctk.CTkFrame(self, fg_color="#F8FAFC", corner_radius=6, height=36)
+        if self.show_pagination or self.on_page_change is not None:
+            self.pagination_bar.pack(side="bottom", fill="x", padx=6, pady=(0, 6))
+
+        self.lbl_page_info = ctk.CTkLabel(
+            self.pagination_bar,
+            text="แสดง 0 รายการ",
+            font=(AppTheme.FONT_FAMILY, 12, "bold"),
+            text_color=AppTheme.COLOR_TEXT_SECONDARY,
+        )
+        self.lbl_page_info.pack(side="left", padx=12, pady=4)
+
+        nav_box = ctk.CTkFrame(self.pagination_bar, fg_color="transparent")
+        nav_box.pack(side="right", padx=8, pady=4)
+
+        self.btn_first = ctk.CTkButton(
+            nav_box,
+            text="⏮ หน้าแรก",
+            width=75,
+            height=28,
+            corner_radius=6,
+            fg_color=AppTheme.COLOR_NEUTRAL_BTN,
+            hover_color=AppTheme.COLOR_NEUTRAL_BTN_HOVER,
+            text_color=AppTheme.COLOR_TEXT_SECONDARY,
+            font=(AppTheme.FONT_FAMILY, 12, "bold"),
+            command=self._go_first_page,
+        )
+        self.btn_first.pack(side="left", padx=2)
+
+        self.btn_prev = ctk.CTkButton(
+            nav_box,
+            text="◀ ก่อนหน้า",
+            width=80,
+            height=28,
+            corner_radius=6,
+            fg_color=AppTheme.COLOR_NEUTRAL_BTN,
+            hover_color=AppTheme.COLOR_NEUTRAL_BTN_HOVER,
+            text_color=AppTheme.COLOR_TEXT_SECONDARY,
+            font=(AppTheme.FONT_FAMILY, 12, "bold"),
+            command=self._go_prev_page,
+        )
+        self.btn_prev.pack(side="left", padx=2)
+
+        self.lbl_page_num = ctk.CTkLabel(
+            nav_box,
+            text="หน้า 1 / 1",
+            width=95,
+            font=(AppTheme.FONT_FAMILY, 12, "bold"),
+            text_color=AppTheme.COLOR_TEXT,
+        )
+        self.lbl_page_num.pack(side="left", padx=6)
+
+        self.btn_next = ctk.CTkButton(
+            nav_box,
+            text="ถัดไป ▶",
+            width=80,
+            height=28,
+            corner_radius=6,
+            fg_color=AppTheme.COLOR_NEUTRAL_BTN,
+            hover_color=AppTheme.COLOR_NEUTRAL_BTN_HOVER,
+            text_color=AppTheme.COLOR_TEXT_SECONDARY,
+            font=(AppTheme.FONT_FAMILY, 12, "bold"),
+            command=self._go_next_page,
+        )
+        self.btn_next.pack(side="left", padx=2)
+
+        self.btn_last = ctk.CTkButton(
+            nav_box,
+            text="สุดท้าย ⏭",
+            width=75,
+            height=28,
+            corner_radius=6,
+            fg_color=AppTheme.COLOR_NEUTRAL_BTN,
+            hover_color=AppTheme.COLOR_NEUTRAL_BTN_HOVER,
+            text_color=AppTheme.COLOR_TEXT_SECONDARY,
+            font=(AppTheme.FONT_FAMILY, 12, "bold"),
+            command=self._go_last_page,
+        )
+        self.btn_last.pack(side="left", padx=2)
 
         hsb = ttk.Scrollbar(self, orient="horizontal")
         hsb.pack(side="bottom", fill="x", padx=6, pady=(0, 4))
@@ -202,11 +294,30 @@ class DataTable(ctk.CTkFrame):
         if vals and self.on_select:
             self.on_select(vals)
 
-    def clear(self):
-        for item in self.tree.get_children():
-            self.tree.delete(item)
+    def _go_first_page(self):
+        if self.current_page > 1:
+            self._change_page(1)
 
-    def set_rows(self, rows: List[Tuple[List[str], str]]):
+    def _go_prev_page(self):
+        if self.current_page > 1:
+            self._change_page(self.current_page - 1)
+
+    def _go_next_page(self):
+        if self.current_page < self.total_pages:
+            self._change_page(self.current_page + 1)
+
+    def _go_last_page(self):
+        if self.current_page < self.total_pages:
+            self._change_page(self.total_pages)
+
+    def _change_page(self, new_page: int):
+        self.current_page = max(1, min(new_page, self.total_pages))
+        if self.on_page_change:
+            self.on_page_change(self.current_page)
+        else:
+            self._render_client_page()
+
+    def _render_tree_rows(self, rows: List[Tuple[List[str], str]]):
         self.clear()
         for idx, (vals, tag) in enumerate(rows):
             if tag == "VOIDED":
@@ -214,6 +325,61 @@ class DataTable(ctk.CTkFrame):
             else:
                 row_tag = "PAID" if idx % 2 == 0 else "ODD"
             self.tree.insert("", "end", values=vals, tags=(row_tag,))
+
+    def _update_pagination_ui(self, shown_count: int):
+        self.total_pages = max(1, (self.total_count + self.page_size - 1) // self.page_size)
+        self.current_page = max(1, min(self.current_page, self.total_pages))
+        if self.total_count == 0 or shown_count == 0:
+            self.lbl_page_info.configure(text="ไม่พบรายการข้อมูล (0 รายการ)")
+        else:
+            start_idx = (self.current_page - 1) * self.page_size + 1
+            end_idx = start_idx + shown_count - 1
+            self.lbl_page_info.configure(
+                text=f"แสดง {start_idx:,} – {end_idx:,} จากทั้งหมด {self.total_count:,} รายการ"
+            )
+        self.lbl_page_num.configure(text=f"หน้า {self.current_page:,} / {self.total_pages:,}")
+        prev_state = "normal" if self.current_page > 1 else "disabled"
+        next_state = "normal" if self.current_page < self.total_pages else "disabled"
+        self.btn_first.configure(state=prev_state)
+        self.btn_prev.configure(state=prev_state)
+        self.btn_next.configure(state=next_state)
+        self.btn_last.configure(state=next_state)
+
+    def _render_client_page(self):
+        start = (self.current_page - 1) * self.page_size
+        end = start + self.page_size
+        page_slice = self._client_rows[start:end]
+        self._render_tree_rows(page_slice)
+        self._update_pagination_ui(len(page_slice))
+
+    def clear(self):
+        items = self.tree.get_children()
+        if items:
+            self.tree.delete(*items)
+
+    def set_rows(
+        self,
+        rows: List[Tuple[List[str], str]],
+        total_count: Optional[int] = None,
+        page: Optional[int] = None,
+    ):
+        if page is not None:
+            self.current_page = max(1, int(page))
+
+        if total_count is not None:
+            # Server/DB-side paginated mode: `rows` is already the current page slice
+            self.total_count = max(len(rows), int(total_count))
+            self._render_tree_rows(rows)
+            self._update_pagination_ui(len(rows))
+        else:
+            # Client-side mode: slice to page_size so Treeview never freezes on 100k+ rows
+            self._client_rows = list(rows)
+            self.total_count = len(self._client_rows)
+            if page is None:
+                self.current_page = 1
+            if self.total_count > self.page_size and not self.pagination_bar.winfo_ismapped():
+                self.pagination_bar.pack(side="bottom", fill="x", padx=6, pady=(0, 6))
+            self._render_client_page()
 
     def get_selected_values(self) -> Optional[List[str]]:
         sel = self.tree.selection()
