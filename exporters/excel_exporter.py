@@ -17,6 +17,72 @@ class ExcelFinanceExporter(BaseFinanceExporter):
             raise RuntimeError("Module 'openpyxl' is not installed.")
 
         os.makedirs(os.path.dirname(os.path.abspath(self.save_path)), exist_ok=True)
+        transactions: List[Dict[str, Any]] = data.get("transactions", [])
+        students: List[Dict[str, Any]] = data.get("students", [])
+        budgets: List[Dict[str, Any]] = data.get("budgets", [])
+        summary = data.get("summary", {})
+
+        # High-volume streaming mode (write_only=True) for >5,000 rows to prevent RAM/CPU freeze at 100,000+ rows
+        if len(transactions) + len(students) > 5000:
+            wb = openpyxl.Workbook(write_only=True)
+            ws_ledger = wb.create_sheet(title="General Ledger")
+            ws_ledger.append([f"{self.college_name} - รายงานสมุดบัญชีแยกประเภท (General Ledger)"])
+            ws_ledger.append([
+                f"รายรับรวม: ฿{summary.get('total_income', 0):,.2f}  |  "
+                f"รายจ่ายรวม: ฿{summary.get('total_expense', 0):,.2f}  |  "
+                f"ดุลการคลังสุทธิ: ฿{summary.get('net_balance', 0):,.2f}"
+            ])
+            ws_ledger.append([])
+            ws_ledger.append(["#", "เลขที่เอกสาร", "วันที่-เวลา", "ประเภท", "หมวดหมู่", "รายการ", "จำนวนเงิน (บาท)", "ช่องทางชำระ", "อ้างอิง", "ผู้บันทึก", "สถานะ"])
+            for r_idx, tx in enumerate(transactions, 1):
+                ws_ledger.append([
+                    r_idx,
+                    tx.get("tx_code", ""),
+                    tx.get("tx_date", ""),
+                    tx.get("tx_type", "INCOME"),
+                    tx.get("category", ""),
+                    tx.get("title", ""),
+                    float(tx.get("amount", 0.0)),
+                    tx.get("payment_method", ""),
+                    tx.get("ref_code", ""),
+                    tx.get("recorded_by", ""),
+                    tx.get("status", "COMPLETED"),
+                ])
+
+            ws_stu = wb.create_sheet(title="Student Tuition")
+            ws_stu.append([f"{self.college_name} - รายงานสถานะค่าเทอมและลูกหนี้การศึกษา (แยกตามระดับชั้น ปวช./ปวส./ป.ตรี และแผนกวิชา)"])
+            ws_stu.append([])
+            ws_stu.append(["รหัสนักศึกษา", "ชื่อ-นามสกุล", "ระดับชั้น", "กลุ่มเรียน/ห้อง", "แผนกวิชา", "สาขางาน", "ประเภททุน", "ค่าเทอมรวม", "ชำระแล้ว", "ค้างชำระ", "สถานะ"])
+            for st in students:
+                bal = max(0.0, float(st.get("total_fee", 0.0)) - float(st.get("paid_amount", 0.0)))
+                ws_stu.append([
+                    st.get("student_code", ""),
+                    st.get("full_name", ""),
+                    st.get("education_level", "ปวช."),
+                    st.get("class_group", "ปวช.1/1"),
+                    st.get("faculty", ""),
+                    st.get("major", ""),
+                    st.get("scholarship_type", ""),
+                    float(st.get("total_fee", 0.0)),
+                    float(st.get("paid_amount", 0.0)),
+                    bal,
+                    st.get("status", "UNPAID"),
+                ])
+
+            ws_bgt = wb.create_sheet(title="Department Budgets")
+            ws_bgt.append([f"{self.college_name} - สรุปงบประมาณประจำปีแยกตามคณะ/หน่วยงาน"])
+            ws_bgt.append([])
+            ws_bgt.append(["รหัสหน่วยงาน", "ชื่อคณะ / หน่วยงาน", "ปีงบประมาณ", "งบประมาณตั้งต้น", "เบิกจ่ายแล้ว", "งบคงเหลือ", "อัตราเบิกจ่าย (%)"])
+            for b in budgets:
+                alloc = float(b.get("allocated_budget", 0.0))
+                spent = float(b.get("spent_budget", 0.0))
+                rem = alloc - spent
+                pct = (spent / alloc * 100.0) if alloc > 0 else 0.0
+                ws_bgt.append([b.get("dept_code", ""), b.get("dept_name", ""), b.get("fiscal_year", "2569"), alloc, spent, rem, f"{pct:.1f}%"])
+
+            wb.save(self.save_path)
+            return self.save_path
+
         wb = openpyxl.Workbook()
 
         # Styles

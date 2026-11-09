@@ -28,7 +28,18 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "default_export_folder": "",
     "evidence_folder": "",
     "theme_accent": "#000000",
+    "bill_template_style": "MODERN",
 }
+
+
+def normalize_template_style(raw_style: Any = None) -> str:
+    """Returns 'MODERN' for the upgraded modern layout or 'CLASSIC' for the original EXofBill layout."""
+    s = str(raw_style or "").strip().upper()
+    if "MODERN" in s or "ทันสมัย" in s or "อัปเกรด" in s or "V2" in s:
+        return "MODERN"
+    if "CLASSIC" in s or "ปกติ" in s or "ดั้งเดิม" in s or "V1" in s:
+        return "CLASSIC"
+    return "CLASSIC"
 
 
 def thai_baht_text(amount: float) -> str:

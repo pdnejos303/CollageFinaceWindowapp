@@ -18,5 +18,6 @@
     "auto_lock_minutes": 15,
     "default_export_folder": "D:/111Work/1111111/CollegeFinanceGodApp/exports_output",
     "evidence_folder": "D:\\111Work\\1111111\\CollegeFinanceGodApp\\data\\evidence",
-    "theme_accent": "#000000"
+    "theme_accent": "#000000",
+    "bill_template_style": "CLASSIC"
 }

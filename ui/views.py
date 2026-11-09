@@ -9,6 +9,7 @@ from core.config import (
     export_full_zip_backup,
     format_receipt_date_thai,
     format_thai_date_short,
+    normalize_template_style,
     restore_database,
     save_config,
     thai_baht_text,
@@ -21,6 +22,17 @@ from exporters.pdf_exporter import PdfReceiptExporter
 from exporters.webhook_exporter import FinanceWebhookDispatcher
 from ui.components import DataTable, SectionHeader
 from ui.theme import AppTheme
+
+TEMPLATE_STYLE_OPTIONS = [
+    "MODERN - รูปแบบทันสมัย (อัปเกรด)",
+    "CLASSIC - รูปแบบปกติ (ดั้งเดิม)",
+]
+
+
+def _style_label_from_code(raw_code: Any) -> str:
+    if normalize_template_style(raw_code) == "MODERN":
+        return TEMPLATE_STYLE_OPTIONS[0]
+    return TEMPLATE_STYLE_OPTIONS[1]
 
 
 def export_document_auto(
@@ -213,12 +225,22 @@ class SmartReceiptPOSView(ctk.CTkFrame):
         btn_box = ctk.CTkFrame(btm_inner, fg_color="transparent")
         btn_box.pack(side="right")
 
+        self.tpl_style_var = ctk.StringVar(value=_style_label_from_code(self.config.get("bill_template_style", "MODERN")))
+        make_dropdown(
+            btn_box,
+            values=TEMPLATE_STYLE_OPTIONS,
+            variable=self.tpl_style_var,
+            width=210,
+            height=42,
+            command=self._on_change_template_style,
+        ).pack(side="left", padx=(0, 8))
+
         self.pay_method_var = ctk.StringVar(value="เงินสด (Cash)")
         make_dropdown(
             btn_box,
             values=["เงินสด (Cash)", "สแกน QR PromptPay", "โอนเข้าบัญชีวิทยาลัย"],
             variable=self.pay_method_var,
-            width=170,
+            width=155,
             height=42,
         ).pack(side="left", padx=(0, 8))
 
@@ -541,6 +563,10 @@ class SmartReceiptPOSView(ctk.CTkFrame):
         self.refresh_next_receipt_no()
         self.refresh_student_list()
         self.on_change_curriculum(self.curricula[0])
+
+    def _on_change_template_style(self, selected_label: str):
+        self.config["bill_template_style"] = normalize_template_style(selected_label)
+        save_config(self.config)
 
     def refresh_next_receipt_no(self):
         prefix = self.config.get("receipt_prefix", "")
@@ -1739,10 +1765,13 @@ class ReceiptRegisterView(ctk.CTkFrame):
             return
         self.config["default_export_folder"] = os.path.dirname(path)
         save_config(self.config)
+        d_val = self.date_var.get()
+        date_pref = d_val if d_val != "ทั้งหมด" else ""
+        search_txt = self.ent_search.get().strip()
         payload = {
             "summary": self.db.get_dashboard_summary(),
-            "transactions": self.db.get_receipts(),
-            "students": self.db.get_students(),
+            "transactions": self.db.get_receipts(search=search_txt, date_prefix=date_pref),
+            "students": self.db.get_students(search=search_txt),
             "budgets": [],
         }
         ExcelFinanceExporter(path, college_name=self.config.get("college_name", "วิทยาลัยอาชีวศึกษาสุพรรณบุรี")).export(
@@ -2142,6 +2171,24 @@ class SettingsAndBackupView(ctk.CTkFrame):
         self.ent_start_no = self._labeled_entry(c_left, "เลขที่ใบเสร็จตั้งแต่:", self.config.get("receipt_no_start", "700605433"))
         self.ent_end_no = self._labeled_entry(c_left, "ถึงใบเสร็จเลขที่:", self.config.get("receipt_no_end", "700999999"))
 
+        style_row = ctk.CTkFrame(c_left, fg_color="transparent")
+        style_row.pack(fill="x", padx=18, pady=5)
+        ctk.CTkLabel(
+            style_row,
+            text="รูปแบบใบเสร็จ/อศท.28:",
+            width=170,
+            anchor="w",
+            font=(AppTheme.FONT_FAMILY, 13, "bold"),
+            text_color=AppTheme.COLOR_TEXT_SECONDARY,
+        ).pack(side="left")
+        self.sys_style_var = ctk.StringVar(value=_style_label_from_code(self.config.get("bill_template_style", "MODERN")))
+        make_dropdown(
+            style_row,
+            values=TEMPLATE_STYLE_OPTIONS,
+            variable=self.sys_style_var,
+            height=36,
+        ).pack(side="left", fill="x", expand=True)
+
         ctk.CTkButton(
             c_left,
             text="💾 บันทึกการตั้งค่า",
@@ -2231,8 +2278,9 @@ class SettingsAndBackupView(ctk.CTkFrame):
         self.config["receipt_book_no"] = self.ent_book.get().strip()
         self.config["receipt_no_start"] = self.ent_start_no.get().strip()
         self.config["receipt_no_end"] = self.ent_end_no.get().strip()
+        self.config["bill_template_style"] = normalize_template_style(self.sys_style_var.get())
         save_config(self.config)
-        messagebox.showinfo("บันทึกสำเร็จ", "บันทึกการตั้งค่าข้อมูลเบื้องต้นเรียบร้อยแล้ว")
+        messagebox.showinfo("บันทึกสำเร็จ", "บันทึกการตั้งค่าข้อมูลเบื้องต้นและรูปแบบเอกสารเรียบร้อยแล้ว")
 
     def run_zip_backup(self):
         out_folder = filedialog.askdirectory(title="เลือกโฟลเดอร์สำหรับเก็บไฟล์สำรองข้อมูล (.zip)")
@@ -2276,7 +2324,9 @@ class CourseRegistrationView(ctk.CTkFrame):
         self.session = session
         self.config = config
 
-        self.students = self.db.get_students()
+        self.STUDENT_DROPDOWN_LIMIT = 200
+        self._stu_search_job: Optional[str] = None
+        self.students: List[Dict[str, Any]] = []
         self.student_map: Dict[str, Dict[str, Any]] = {}
         self.course_catalog = self.db.get_course_catalog()
         self.course_map: Dict[str, Dict[str, Any]] = {}
@@ -2322,10 +2372,20 @@ class CourseRegistrationView(ctk.CTkFrame):
         btn_box = ctk.CTkFrame(btm_in, fg_color="transparent")
         btn_box.pack(side="right")
 
+        self.reg_style_var = ctk.StringVar(value=_style_label_from_code(self.config.get("bill_template_style", "MODERN")))
+        make_dropdown(
+            btn_box,
+            values=TEMPLATE_STYLE_OPTIONS,
+            variable=self.reg_style_var,
+            width=210,
+            height=40,
+            command=self._on_change_reg_style,
+        ).pack(side="left", padx=(0, 8))
+
         ctk.CTkButton(
             btn_box,
             text="ลบวิชาที่เลือก",
-            width=115,
+            width=110,
             height=40,
             corner_radius=8,
             fg_color=AppTheme.COLOR_NEUTRAL_BTN,
@@ -2338,7 +2398,7 @@ class CourseRegistrationView(ctk.CTkFrame):
         ctk.CTkButton(
             btn_box,
             text="🖨️ บันทึก & พิมพ์บัตรลงทะเบียนรายวิชา อศท.28 (.pdf)",
-            width=340,
+            width=310,
             height=42,
             corner_radius=8,
             fg_color=AppTheme.COLOR_PRIMARY_BLUE,
@@ -2363,6 +2423,16 @@ class CourseRegistrationView(ctk.CTkFrame):
         r1 = ctk.CTkFrame(stu_card, fg_color="transparent")
         r1.pack(fill="x", padx=16, pady=(10, 4))
 
+        self.ent_stu_search = make_entry(
+            r1,
+            width=155,
+            height=36,
+            bold=False,
+            placeholder_text="🔍 ค้นหารหัส/ชื่อ...",
+        )
+        self.ent_stu_search.pack(side="left", padx=(0, 8))
+        self.ent_stu_search.bind("<KeyRelease>", self._schedule_student_search)
+
         ctk.CTkLabel(
             r1,
             text="เลือกนักศึกษา:",
@@ -2370,33 +2440,22 @@ class CourseRegistrationView(ctk.CTkFrame):
             text_color=AppTheme.COLOR_TEXT_SECONDARY,
         ).pack(side="left", padx=(0, 6))
 
-        stu_labels = []
-        default_lbl = ""
-        for s in self.students:
-            lbl = f"{s['student_code']} — {s['full_name']} ({s['class_group']})"
-            self.student_map[lbl] = s
-            stu_labels.append(lbl)
-            if s["student_code"] == "69219100049":
-                default_lbl = lbl
-        if not stu_labels:
-            stu_labels = ["-"]
-        if not default_lbl:
-            default_lbl = stu_labels[0]
-
-        self.stu_var = ctk.StringVar(value=default_lbl)
+        self.stu_var = ctk.StringVar(value="-")
         self.opt_stu = make_dropdown(
             r1,
-            values=stu_labels,
+            values=["-"],
             variable=self.stu_var,
-            width=340,
+            width=260,
             height=36,
             command=self.on_select_student,
         )
-        self.opt_stu.pack(side="left", padx=(0, 12))
+        self.opt_stu.pack(side="left", padx=(0, 10))
 
         ctk.CTkLabel(r1, text="รหัสนักศึกษา:", font=(AppTheme.FONT_FAMILY, 13), text_color=AppTheme.COLOR_TEXT_SECONDARY).pack(side="left", padx=(0, 4))
         self.ent_code = make_entry(r1, width=115, height=34)
         self.ent_code.pack(side="left", padx=(0, 10))
+        self.ent_code.bind("<Return>", self._lookup_student_by_code_entry)
+        self.ent_code.bind("<FocusOut>", self._lookup_student_by_code_entry)
 
         ctk.CTkLabel(r1, text="ชื่อ-นามสกุล:", font=(AppTheme.FONT_FAMILY, 13), text_color=AppTheme.COLOR_TEXT_SECONDARY).pack(side="left", padx=(0, 4))
         self.ent_name = make_entry(r1, width=190, height=34)
@@ -2509,6 +2568,58 @@ class CourseRegistrationView(ctk.CTkFrame):
         self.table.pack(side="top", fill="both", expand=True)
 
         self.on_pick_catalog_course(course_labels[0])
+        self.refresh_student_dropdown(prefer_code="69219100049")
+
+    def _schedule_student_search(self, _event=None):
+        if self._stu_search_job is not None:
+            try:
+                self.after_cancel(self._stu_search_job)
+            except Exception:
+                pass
+        self._stu_search_job = self.after(250, self.refresh_student_dropdown)
+
+    def _lookup_student_by_code_entry(self, _event=None):
+        code = self.ent_code.get().strip()
+        if not code:
+            return
+        stu = self.db.get_student_by_code(code)
+        if stu:
+            self._populate_student_fields(stu)
+
+    def refresh_student_dropdown(self, prefer_code: str = ""):
+        self._stu_search_job = None
+        search_txt = self.ent_stu_search.get().strip() if hasattr(self, "ent_stu_search") else ""
+        total_matching = self.db.count_students(search=search_txt)
+        self.students = self.db.get_students(search=search_txt, limit=self.STUDENT_DROPDOWN_LIMIT, offset=0)
+
+        if prefer_code and not any(s["student_code"] == prefer_code for s in self.students):
+            pref_stu = self.db.get_student_by_code(prefer_code)
+            if pref_stu:
+                self.students.insert(0, pref_stu)
+
+        self.student_map.clear()
+        stu_labels = []
+        default_lbl = ""
+        for s in self.students:
+            lbl = f"{s['student_code']} — {s['full_name']} ({s['class_group']})"
+            self.student_map[lbl] = s
+            stu_labels.append(lbl)
+            if prefer_code and s["student_code"] == prefer_code:
+                default_lbl = lbl
+
+        if not stu_labels:
+            stu_labels = ["ไม่พบรายชื่อนักศึกษาที่ค้นหา"]
+            self.opt_stu.configure(values=stu_labels)
+            self.stu_var.set(stu_labels[0])
+            return
+
+        if total_matching > len(self.students):
+            stu_labels.append(f"--- แสดง {len(self.students):,} จาก {total_matching:,} คน (พิมพ์ค้นหาเพื่อกรองเพิ่ม) ---")
+
+        if not default_lbl:
+            default_lbl = stu_labels[0]
+        self.opt_stu.configure(values=stu_labels)
+        self.stu_var.set(default_lbl)
         self.on_select_student(default_lbl)
 
     def on_pick_catalog_course(self, label: str):
@@ -2526,10 +2637,7 @@ class CourseRegistrationView(ctk.CTkFrame):
         self.ent_c_cr.delete(0, "end")
         self.ent_c_cr.insert(0, str(c["credits"]))
 
-    def on_select_student(self, label: str):
-        stu = self.student_map.get(label)
-        if not stu:
-            return
+    def _populate_student_fields(self, stu: Dict[str, Any]):
         self.ent_code.delete(0, "end")
         self.ent_code.insert(0, stu.get("student_code", ""))
         self.ent_name.delete(0, "end")
@@ -2544,6 +2652,12 @@ class CourseRegistrationView(ctk.CTkFrame):
 
         self.registered_courses = self.db.get_student_registered_courses(stu["student_code"])
         self.refresh_table_ui()
+
+    def on_select_student(self, label: str):
+        stu = self.student_map.get(label)
+        if not stu:
+            return
+        self._populate_student_fields(stu)
 
     def load_default_ex_courses(self):
         self.registered_courses = [dict(c) for c in self.db.get_course_catalog()]
@@ -2618,6 +2732,10 @@ class CourseRegistrationView(ctk.CTkFrame):
             text=f"รวมชั่วโมง/หน่วยกิต ({len(self.registered_courses)} วิชา): ท. {tot_t}  |  ป. {tot_p}  |  นก. {tot_c}   •   ค่าธรรมเนียมการศึกษา: ฿1,130.00 บาท"
         )
 
+    def _on_change_reg_style(self, selected_label: str):
+        self.config["bill_template_style"] = normalize_template_style(selected_label)
+        save_config(self.config)
+
     def save_and_export_registration_card(self):
         stu_code = self.ent_code.get().strip()
         stu_name = self.ent_name.get().strip()
@@ -2650,8 +2768,13 @@ class CourseRegistrationView(ctk.CTkFrame):
         if not save_path:
             return
 
+        chosen_style = normalize_template_style(self.reg_style_var.get())
+        self.config["bill_template_style"] = chosen_style
+        save_config(self.config)
+
         payload = {
             "report_type": "COURSE_REGISTRATION",
+            "template_style": chosen_style,
             "student_code": stu_code,
             "full_name": stu_name,
             "class_group": self.ent_cls.get().strip() or "ปวช. 1/2",

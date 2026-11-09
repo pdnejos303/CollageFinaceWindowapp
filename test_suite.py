@@ -213,21 +213,32 @@ class TestSPVCSmartReceiptSystem(unittest.TestCase):
 
         stu = self.db.get_student_by_code("69219100049")
         rcp = self.db.get_receipt_by_no("700605308")
-        reg_payload = {
-            "report_type": "COURSE_REGISTRATION",
-            "student": stu,
-            "academic_year": "1/2569",
-            "courses": courses,
-            "fee_items": rcp["items"],
-            "total_amount": rcp["net_total_amount"],
-            "baht_text": rcp["amount_text_th"],
-        }
-        out_pdf = os.path.join(self.temp_dir, "ost28.pdf")
-        out_docx = os.path.join(self.temp_dir, "ost28.docx")
-        PdfReceiptExporter(out_pdf).export(reg_payload)
-        DocxReceiptExporter(out_docx).export(reg_payload)
-        self.assertTrue(os.path.exists(out_pdf))
-        self.assertTrue(os.path.exists(out_docx))
+        for style_code in ("CLASSIC", "MODERN"):
+            rcp_copy = dict(rcp)
+            rcp_copy["template_style"] = style_code
+            r_pdf = os.path.join(self.temp_dir, f"rcp_{style_code}.pdf")
+            r_docx = os.path.join(self.temp_dir, f"rcp_{style_code}.docx")
+            PdfReceiptExporter(r_pdf).export(rcp_copy)
+            DocxReceiptExporter(r_docx).export(rcp_copy)
+            self.assertTrue(os.path.exists(r_pdf))
+            self.assertTrue(os.path.exists(r_docx))
+
+            reg_payload = {
+                "report_type": "COURSE_REGISTRATION",
+                "template_style": style_code,
+                "student": stu,
+                "academic_year": "1/2569",
+                "courses": courses,
+                "fee_items": rcp["items"],
+                "total_amount": rcp["net_total_amount"],
+                "baht_text": rcp["amount_text_th"],
+            }
+            out_pdf = os.path.join(self.temp_dir, f"ost28_{style_code}.pdf")
+            out_docx = os.path.join(self.temp_dir, f"ost28_{style_code}.docx")
+            PdfReceiptExporter(out_pdf).export(reg_payload)
+            DocxReceiptExporter(out_docx).export(reg_payload)
+            self.assertTrue(os.path.exists(out_pdf))
+            self.assertTrue(os.path.exists(out_docx))
 
 
 if __name__ == "__main__":

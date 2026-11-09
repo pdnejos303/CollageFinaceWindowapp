@@ -209,9 +209,15 @@ class DatabaseManager:
                 CREATE INDEX IF NOT EXISTS idx_master_options_cat ON master_options(category, sort_order);
                 CREATE INDEX IF NOT EXISTS idx_students_code_name ON students(student_code, full_name, class_group, status);
                 CREATE INDEX IF NOT EXISTS idx_students_dept_level ON students(education_level, faculty, major);
+                CREATE INDEX IF NOT EXISTS idx_students_status_fee ON students(status, total_fee, paid_amount);
+                CREATE INDEX IF NOT EXISTS idx_students_class_code ON students(class_group, student_code);
+                CREATE INDEX IF NOT EXISTS idx_students_major_code ON students(major, student_code);
                 CREATE INDEX IF NOT EXISTS idx_receipts_no_date ON receipts(receipt_no, receipt_date, status);
+                CREATE INDEX IF NOT EXISTS idx_receipts_status_amt ON receipts(status, net_total_amount);
+                CREATE INDEX IF NOT EXISTS idx_receipts_date_id ON receipts(receipt_date, id DESC);
+                CREATE INDEX IF NOT EXISTS idx_receipts_num_no ON receipts(CAST(receipt_no AS INTEGER)) WHERE receipt_no GLOB '[0-9]*';
                 CREATE INDEX IF NOT EXISTS idx_receipts_student ON receipts(student_code, term_code);
-                CREATE INDEX IF NOT EXISTS idx_receipt_items_rcp ON receipt_items(receipt_id);
+                CREATE INDEX IF NOT EXISTS idx_receipt_items_rcp ON receipt_items(receipt_id, line_no);
                 CREATE INDEX IF NOT EXISTS idx_stu_course_reg ON student_course_registrations(student_code, term_code);
                 """
             )
@@ -1684,6 +1690,13 @@ class DatabaseManager:
         seen_classes = set()
 
         with self._connect() as conn:
+            existing_map = {
+                r["student_code"]: float(r["paid_amount"])
+                for r in conn.execute("SELECT student_code, paid_amount FROM students").fetchall()
+            }
+            to_insert: List[Tuple[Any, ...]] = []
+            to_update: List[Tuple[Any, ...]] = []
+
             conn.execute("BEGIN TRANSACTION;")
             try:
                 for r in raw_rows:
@@ -1703,29 +1716,15 @@ class DatabaseManager:
                     edu_lvl = str(r[9]).strip() if len(r) > 9 and r[9] else default_class_group
                     cls_grp = str(r[10]).strip() if len(r) > 10 and r[10] else default_class_group
 
-                    existing = conn.execute("SELECT id, paid_amount FROM students WHERE student_code = ?", (code,)).fetchone()
-                    if existing:
-                        paid = float(existing["paid_amount"])
+                    if code in existing_map:
+                        paid = existing_map[code]
                         st_status = "PAID" if paid >= fee else ("PARTIAL" if paid > 0 else "UNPAID")
-                        conn.execute(
-                            """
-                            UPDATE students
-                            SET full_name = ?, citizen_id = ?, education_level = ?, class_group = ?, faculty = ?, major = ?, year_level = ?, scholarship_type = ?, total_fee = ?, status = ?, phone = ?
-                            WHERE student_code = ?
-                            """,
-                            (name, cid, edu_lvl, cls_grp, fac, maj, yr, sch, fee, st_status, phone, code),
-                        )
+                        to_update.append((name, cid, edu_lvl, cls_grp, fac, maj, yr, sch, fee, st_status, phone, code))
                         updated += 1
                     else:
                         st_status = "PAID" if fee <= 0 else "UNPAID"
-                        conn.execute(
-                            """
-                            INSERT INTO students
-                            (student_code, full_name, citizen_id, education_level, class_group, faculty, major, year_level, scholarship_type, total_fee, paid_amount, status, phone)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0.0, ?, ?)
-                            """,
-                            (code, name, cid, edu_lvl, cls_grp, fac, maj, yr, sch, fee, st_status, phone),
-                        )
+                        to_insert.append((code, name, cid, edu_lvl, cls_grp, fac, maj, yr, sch, fee, st_status, phone))
+                        existing_map[code] = 0.0
                         inserted += 1
 
                     imported_codes.append(code)
@@ -1735,6 +1734,25 @@ class DatabaseManager:
                         seen_majors.add(maj)
                     if cls_grp:
                         seen_classes.add(cls_grp)
+
+                if to_insert:
+                    conn.executemany(
+                        """
+                        INSERT INTO students
+                        (student_code, full_name, citizen_id, education_level, class_group, faculty, major, year_level, scholarship_type, total_fee, paid_amount, status, phone)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0.0, ?, ?)
+                        """,
+                        to_insert,
+                    )
+                if to_update:
+                    conn.executemany(
+                        """
+                        UPDATE students
+                        SET full_name = ?, citizen_id = ?, education_level = ?, class_group = ?, faculty = ?, major = ?, year_level = ?, scholarship_type = ?, total_fee = ?, status = ?, phone = ?
+                        WHERE student_code = ?
+                        """,
+                        to_update,
+                    )
 
                 if seen_faculties:
                     conn.executemany(
