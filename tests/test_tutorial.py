@@ -27,6 +27,11 @@ import customtkinter as ctk
 from core.config import DEFAULT_CONFIG, load_config, save_config
 from core.database import DatabaseManager
 from core.models import UserSession
+
+try:
+    from test_ui_suite import get_module_root
+except ImportError:
+    from tests.test_ui_suite import get_module_root
 from ui.main_window import MainWindow
 from ui.tutorial_overlay import (
     TUTORIAL_STEPS,
@@ -35,16 +40,6 @@ from ui.tutorial_overlay import (
     TutorialStep,
     TutorialWelcomeDialog,
 )
-
-_MODULE_ROOT = None
-
-
-def get_module_root():
-    global _MODULE_ROOT
-    if _MODULE_ROOT is None or not _MODULE_ROOT.winfo_exists():
-        _MODULE_ROOT = ctk.CTk()
-        _MODULE_ROOT.withdraw()
-    return _MODULE_ROOT
 
 
 class BaseTutorialTestCase(unittest.TestCase):
