@@ -31,6 +31,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "theme_accent": "#000000",
     "bill_template_style": "CLASSIC",
     "show_course_registration": False,
+    "tutorial_completed": False,
 }
 
 

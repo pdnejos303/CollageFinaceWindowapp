@@ -3,16 +3,21 @@ import os
 import sys
 import traceback
 from tkinter import messagebox
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 import customtkinter as ctk
 
-from core.config import backup_database
+from core.config import backup_database, save_config
 from core.database import DatabaseManager
 from core.models import UserSession
 from exporters.webhook_exporter import FinanceWebhookDispatcher
 from ui.components import SearchableDropdown
 from ui.icon_manager import IconManager
 from ui.theme import AppTheme
+from ui.tutorial_overlay import (
+    InteractiveTutorialManager,
+    TutorialStep,
+    TutorialWelcomeDialog,
+)
 from ui.batch_class_view import BatchClassReceiptView
 from ui.dashboard_view import DashboardView
 from ui.receipt_gallery_view import ReceiptGalleryView
@@ -58,6 +63,9 @@ class MainWindow:
         self.lbl_user_name = None
         self.lbl_user_role = None
         self.btn_logout = None
+        self.btn_tutorial: Optional[ctk.CTkButton] = None
+        self.tutorial_manager: Optional[InteractiveTutorialManager] = None
+        self._welcome_dialog: Optional[TutorialWelcomeDialog] = None
         self.sidebar_is_collapsed = False
         self.SIDEBAR_EXPANDED_WIDTH = 250
         self.SIDEBAR_COLLAPSED_WIDTH = 72
@@ -236,6 +244,19 @@ class MainWindow:
         )
         self.lbl_bottom_meta.pack(side="top", pady=(0, 8))
 
+        self.btn_tutorial = ctk.CTkButton(
+            self.sidebar_bottom,
+            text="❓ สอนใช้งาน",
+            height=AppTheme.CTRL_H_MD,
+            corner_radius=AppTheme.RADIUS_BTN,
+            fg_color="#1E3A8A",
+            hover_color="#1D4ED8",
+            text_color="#FFFFFF",
+            font=(AppTheme.FONT_FAMILY, 13, "bold"),
+            command=self.start_tutorial,
+        )
+        self.btn_tutorial.pack(side="top", fill="x", pady=(0, 8))
+
         exit_icon = IconManager.get_icon("exit", state="normal", size=(18, 18))
         self.btn_exit = ctk.CTkButton(
             self.sidebar_bottom,
@@ -264,6 +285,8 @@ class MainWindow:
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.switch_tab("dashboard")
+        if not self.config.get("tutorial_completed", False):
+            self.root.after(450, self._maybe_show_tutorial_welcome)
         self.root.mainloop()
 
     def is_button_packed(self, btn: Optional[ctk.CTkButton]) -> bool:
@@ -309,6 +332,8 @@ class MainWindow:
             self.brand_text_box.pack_forget()
             self.user_box.pack_forget()
             self.lbl_bottom_meta.pack_forget()
+            if self.btn_tutorial is not None:
+                self.btn_tutorial.configure(text="❓")
             exit_icon = IconManager.get_icon("exit", state="normal", size=(20, 20))
             self.btn_exit.configure(image=exit_icon, text="")
 
@@ -331,7 +356,13 @@ class MainWindow:
             self.btn_toggle_sidebar.configure(image=chevron_left, text="")
             self.brand_text_box.pack(side="left", fill="x", expand=True)
             self.user_box.pack(fill="x", pady=(12, 0))
-            self.lbl_bottom_meta.pack(side="top", pady=(0, 6), before=self.btn_exit)
+            self.lbl_bottom_meta.pack(
+                side="top",
+                pady=(0, 6),
+                before=self.btn_tutorial if self.btn_tutorial is not None else self.btn_exit,
+            )
+            if self.btn_tutorial is not None:
+                self.btn_tutorial.configure(text="❓ สอนใช้งาน")
             exit_icon = IconManager.get_icon("exit", state="normal", size=(18, 18))
             self.btn_exit.configure(image=exit_icon, text="  ออกจากโปรแกรม", compound="left")
 
@@ -615,6 +646,92 @@ class MainWindow:
             except Exception:
                 pass
 
+    def get_visible_tutorial_pages(self) -> List[str]:
+        """Returns page keys currently visible in the sidebar based on config/role."""
+        show_reg = bool(self.config.get("show_course_registration", False))
+        return [
+            key
+            for key, _label in self.nav_items_config
+            if key != "registration" or show_reg
+        ]
+
+    def _save_tutorial_completed(self) -> None:
+        """Marks the interactive tutorial as completed and persists config.json."""
+        self.config["tutorial_completed"] = True
+        try:
+            save_config(self.config)
+        except Exception:
+            pass
+
+    def _on_welcome_skip(self, dont_ask_again: bool = True) -> None:
+        """Handles skipping the first-launch tutorial welcome dialog."""
+        if dont_ask_again:
+            self._save_tutorial_completed()
+
+    def _maybe_show_tutorial_welcome(self) -> None:
+        """Shows the first-launch welcome modal if tutorial has not been completed."""
+        if not self.config.get("tutorial_completed", False):
+            self.show_tutorial_welcome()
+
+    def show_tutorial_welcome(self) -> Optional[TutorialWelcomeDialog]:
+        """Opens the Thai tutorial welcome dialog."""
+        root = getattr(self, "root", None)
+        if root is None:
+            return None
+        try:
+            if not root.winfo_exists():
+                return None
+        except Exception:
+            return None
+
+        if self._welcome_dialog is not None:
+            try:
+                if self._welcome_dialog.winfo_exists():
+                    self._welcome_dialog.lift()
+                    return self._welcome_dialog
+            except Exception:
+                pass
+
+        self._welcome_dialog = TutorialWelcomeDialog(
+            parent=root,
+            on_start=self.start_tutorial,
+            on_skip=self._on_welcome_skip,
+            config=self.config,
+        )
+        return self._welcome_dialog
+
+    def _resolve_tutorial_widget(self, step: TutorialStep) -> Optional[Any]:
+        """Resolves a target widget on the active view or sidebar for tutorial highlighting."""
+        if step.target_attr and self.current_view is not None:
+            target = getattr(self.current_view, step.target_attr, None)
+            if target is not None:
+                return target
+        nav_btn = self.nav_buttons.get(step.page_key)
+        if nav_btn is not None and self.is_button_packed(nav_btn):
+            return nav_btn
+        return getattr(self, "content_area", None)
+
+    def start_tutorial(self) -> bool:
+        """Launches the interactive Thai walkthrough across all visible pages."""
+        root = getattr(self, "root", None)
+        if root is None:
+            return False
+
+        if self.tutorial_manager is not None and self.tutorial_manager.is_active:
+            self.tutorial_manager.stop()
+
+        self.tutorial_manager = InteractiveTutorialManager(
+            root=root,
+            navigate_callback=self.switch_tab,
+            visible_pages=self.get_visible_tutorial_pages(),
+            user_role=getattr(self.session, "role", "STAFF"),
+            config=self.config,
+            on_complete=self._save_tutorial_completed,
+            on_skip=self._save_tutorial_completed,
+            widget_resolver=self._resolve_tutorial_widget,
+        )
+        return self.tutorial_manager.start()
+
     def logout(self):
         """Logs out the current user and triggers the re-login callback if configured."""
         if self.on_logout is not None:
@@ -625,6 +742,11 @@ class MainWindow:
         self.on_close()
 
     def on_close(self):
+        if self.tutorial_manager is not None:
+            try:
+                self.tutorial_manager.stop()
+            except Exception:
+                pass
         if self.config.get("auto_backup_on_exit", True):
             try:
                 backup_database(self.db.db_path)
