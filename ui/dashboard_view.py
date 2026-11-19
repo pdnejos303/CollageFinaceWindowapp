@@ -62,15 +62,22 @@ class DashboardView(ctk.CTkFrame):
         self.selected_period_var = ctk.StringVar(value="ทั้งหมด (All Time)")
 
         # ------------------------------------------------------------------
+        # 0. SCROLLABLE BODY AREA (All dashboard content scrolls together)
+        # ------------------------------------------------------------------
+        self.scroll_body = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        self.scroll_body.pack(fill="both", expand=True)
+
+        # ------------------------------------------------------------------
         # 1. TOP HEADER: Single Flat Header Bar
         # ------------------------------------------------------------------
         header = SectionHeader(
-            self,
+            self.scroll_body,
             "แดชบอร์ดภาพรวมการเงิน",
             "วิทยาลัยอาชีวศึกษาสุพรรณบุรี • ติดตามยอดวันนี้ ยอดรายเดือน ยอดรวม และวิเคราะห์ตามชั้นปี/แผนกวิชา",
             corner_radius=AppTheme.RADIUS_CARD,
         )
         header.pack(fill="x", pady=(0, 12))
+        self.header = header
 
         header.add_action_button(
             "รีเฟรชข้อมูล",
@@ -93,13 +100,14 @@ class DashboardView(ctk.CTkFrame):
         # 2. FILTER BAR: Clean, Airy Single-Row Filter Scope
         # ------------------------------------------------------------------
         filter_bar = ctk.CTkFrame(
-            self,
+            self.scroll_body,
             corner_radius=AppTheme.RADIUS_CARD,
             fg_color=AppTheme.COLOR_SURFACE,
             border_width=1,
             border_color=AppTheme.COLOR_BORDER,
         )
         filter_bar.pack(fill="x", pady=(0, 12))
+        self.filter_bar = filter_bar
 
         filters_grid = ctk.CTkFrame(filter_bar, fg_color="transparent")
         filters_grid.pack(fill="x", padx=16, pady=(12, 6))
@@ -222,12 +230,6 @@ class DashboardView(ctk.CTkFrame):
             anchor="w",
         )
         self.lbl_filter_scope.pack(fill="x", padx=20, pady=(0, 10))
-
-        # ------------------------------------------------------------------
-        # 3. SCROLLABLE BODY AREA
-        # ------------------------------------------------------------------
-        self.scroll_body = ctk.CTkScrollableFrame(self, fg_color="transparent")
-        self.scroll_body.pack(fill="both", expand=True)
 
         # ------------------------------------------------------------------
         # ROW 1: 5 Executive KPI StatCards (Flat Rectangles, 1 Border)

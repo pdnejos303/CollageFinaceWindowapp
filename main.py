@@ -10,8 +10,8 @@ if sys.platform == "win32":
 
 from core.config import get_base_dir, load_config
 from core.database import DatabaseManager
-from core.models import UserSession
 from ui.notifications import patch_tkinter_messagebox
+from ui.login_window import LoginWindow
 from ui.main_window import MainWindow
 
 # Apply modern dialog theme to all popups
@@ -44,15 +44,23 @@ class CollegeFinanceGodApp:
         self.db = DatabaseManager(self.db_path, self.config.get("database_url", ""))
 
     def run(self):
-        default_session = UserSession(
-            user_id=1,
-            username="admin",
-            full_name="นางสาวสุพรรณี ศรีอาชีวะ",
-            role="ADMIN",
-            department="งานการเงิน วิทยาลัยอาชีวศึกษาสุพรรณบุรี",
-        )
-        main_win = MainWindow(self.db, default_session, self.config)
-        main_win.show()
+        college_name = self.config.get("college_name", "วิทยาลัยอาชีวศึกษาสุพรรณบุรี")
+        while True:
+            login_win = LoginWindow(self.db, college_name)
+            session = login_win.show()
+            if session is None:
+                break
+
+            should_relogin = False
+
+            def _on_logout():
+                nonlocal should_relogin
+                should_relogin = True
+
+            main_win = MainWindow(self.db, session, self.config, on_logout=_on_logout)
+            main_win.show()
+            if not should_relogin:
+                break
 
 
 def main():

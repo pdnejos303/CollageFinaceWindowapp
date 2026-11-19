@@ -3,7 +3,7 @@ import os
 import sys
 import traceback
 from tkinter import messagebox
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 import customtkinter as ctk
 
 from core.config import backup_database
@@ -15,6 +15,7 @@ from ui.icon_manager import IconManager
 from ui.theme import AppTheme
 from ui.batch_class_view import BatchClassReceiptView
 from ui.dashboard_view import DashboardView
+from ui.receipt_gallery_view import ReceiptGalleryView
 from ui.views import (
     CourseRegistrationView,
     ReceiptRegisterView,
@@ -31,10 +32,17 @@ class MainWindow:
     Modern vector PNG icons for navigation items (No cheap emojis).
     """
 
-    def __init__(self, db: DatabaseManager, session: UserSession, config: Dict[str, Any]):
+    def __init__(
+        self,
+        db: DatabaseManager,
+        session: UserSession,
+        config: Dict[str, Any],
+        on_logout: Optional[Callable[[], None]] = None,
+    ):
         self.db = db
         self.session = session
         self.config = config
+        self.on_logout = on_logout
         self.webhook = FinanceWebhookDispatcher(
             webhook_url=config.get("webhook_url", ""),
             enabled=config.get("webhook_enabled", False),
@@ -44,6 +52,12 @@ class MainWindow:
         self._view_cache: Dict[str, ctk.CTkFrame] = {}
         self.current_view = None
         self.current_tab_key = "dashboard"
+        self.top_header = None
+        self.lbl_header_title = None
+        self.lbl_profile_avatar = None
+        self.lbl_user_name = None
+        self.lbl_user_role = None
+        self.btn_logout = None
         self.sidebar_is_collapsed = False
         self.SIDEBAR_EXPANDED_WIDTH = 250
         self.SIDEBAR_COLLAPSED_WIDTH = 72
@@ -55,6 +69,7 @@ class MainWindow:
             ("registration", "ทะเบียนวิชา (อศท.28)"),
             ("students", "ฐานข้อมูลนักศึกษา"),
             ("receipts", "ประวัติใบเสร็จ"),
+            ("gallery", "คลังภาพใบเสร็จ"),
             ("settings", "ตั้งค่าระบบ"),
         ]
 
@@ -237,9 +252,15 @@ class MainWindow:
         )
         self.btn_exit.pack(side="top", fill="x")
 
+        # Right Workspace Shell (Global Top Header + Content Area)
+        self.right_shell = ctk.CTkFrame(self.root, corner_radius=0, fg_color=AppTheme.COLOR_BG)
+        self.right_shell.pack(side="right", fill="both", expand=True)
+
+        self._build_top_header(self.right_shell)
+
         # Main Workspace Area (generous breathing room)
-        self.content_area = ctk.CTkFrame(self.root, corner_radius=0, fg_color=AppTheme.COLOR_BG)
-        self.content_area.pack(side="right", fill="both", expand=True, padx=24, pady=20)
+        self.content_area = ctk.CTkFrame(self.right_shell, corner_radius=0, fg_color=AppTheme.COLOR_BG)
+        self.content_area.pack(side="top", fill="both", expand=True, padx=24, pady=20)
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.switch_tab("dashboard")
@@ -331,8 +352,110 @@ class MainWindow:
 
         self.refresh_nav_visibility()
 
+    def _get_tab_title(self, tab_key: str) -> str:
+        """Returns the Thai display title for a navigation tab key."""
+        for key, label in self.nav_items_config:
+            if key == tab_key:
+                return label
+        return "ระบบการเงินและออกใบเสร็จ"
+
+    def _build_top_header(self, parent) -> ctk.CTkFrame:
+        """Builds the global top app header with current view title, user profile, and logout button."""
+        self.top_header = ctk.CTkFrame(
+            parent,
+            height=56,
+            corner_radius=0,
+            fg_color=AppTheme.COLOR_SURFACE,
+        )
+        self.top_header.pack(side="top", fill="x")
+        self.top_header.pack_propagate(False)
+
+        ctk.CTkFrame(parent, height=1, fg_color=AppTheme.COLOR_BORDER).pack(side="top", fill="x")
+
+        # Left side: active tab title
+        left_box = ctk.CTkFrame(self.top_header, fg_color="transparent")
+        left_box.pack(side="left", fill="y", padx=24)
+
+        self.lbl_header_title = ctk.CTkLabel(
+            left_box,
+            text=self._get_tab_title(self.current_tab_key),
+            font=(AppTheme.FONT_FAMILY, 16, "bold"),
+            text_color=AppTheme.COLOR_TEXT,
+            anchor="w",
+        )
+        self.lbl_header_title.pack(side="left", pady=12)
+
+        # Right side: profile avatar, user name, role badge, logout button
+        right_box = ctk.CTkFrame(self.top_header, fg_color="transparent")
+        right_box.pack(side="right", fill="y", padx=24)
+
+        display_name = (getattr(self.session, "full_name", "") or getattr(self.session, "username", "") or "ผู้ใช้งาน").strip()
+        role_text = (getattr(self.session, "role", "") or "STAFF").strip().upper()
+        initial_char = display_name[0].upper() if display_name else "U"
+
+        self.lbl_profile_avatar = ctk.CTkLabel(
+            right_box,
+            text=initial_char,
+            width=32,
+            height=32,
+            corner_radius=16,
+            fg_color=AppTheme.COLOR_PRIMARY_BLUE,
+            text_color="#FFFFFF",
+            font=(AppTheme.FONT_FAMILY, 13, "bold"),
+        )
+        self.lbl_profile_avatar.pack(side="left", padx=(0, 8), pady=12)
+
+        self.lbl_user_name = ctk.CTkLabel(
+            right_box,
+            text=display_name,
+            font=(AppTheme.FONT_FAMILY, 13, "bold"),
+            text_color=AppTheme.COLOR_TEXT,
+        )
+        self.lbl_user_name.pack(side="left", padx=(0, 8), pady=12)
+
+        self.lbl_user_role = ctk.CTkLabel(
+            right_box,
+            text=role_text,
+            height=24,
+            corner_radius=6,
+            fg_color="#EFF6FF",
+            text_color=AppTheme.COLOR_PRIMARY_BLUE,
+            font=(AppTheme.FONT_FAMILY, 11, "bold"),
+            padx=10,
+        )
+        self.lbl_user_role.pack(side="left", padx=(0, 14), pady=12)
+
+        self.btn_logout = ctk.CTkButton(
+            right_box,
+            text="ออกจากระบบ",
+            width=104,
+            height=32,
+            corner_radius=AppTheme.RADIUS_BTN,
+            fg_color="#FEF2F2",
+            hover_color="#FEE2E2",
+            text_color=AppTheme.COLOR_DANGER,
+            border_width=1,
+            border_color="#FECACA",
+            font=(AppTheme.FONT_FAMILY, 12, "bold"),
+            command=self.logout,
+        )
+        self.btn_logout.pack(side="left", pady=12)
+        return self.top_header
+
     def on_change_cashier(self, new_name: str):
         self.session.full_name = new_name
+        if self.lbl_user_name is not None:
+            try:
+                if self.lbl_user_name.winfo_exists():
+                    self.lbl_user_name.configure(text=new_name)
+            except Exception:
+                pass
+        if self.lbl_profile_avatar is not None and new_name:
+            try:
+                if self.lbl_profile_avatar.winfo_exists():
+                    self.lbl_profile_avatar.configure(text=new_name.strip()[0].upper())
+            except Exception:
+                pass
 
     def _discard_cached_view(self, tab_key: str):
         """Destroys and removes a cached view if it is not currently displayed."""
@@ -365,6 +488,10 @@ class MainWindow:
             return StudentAndFeeCatalogView(self.content_area, self.db, self.session, self.config)
         if tab_key == "receipts":
             return ReceiptRegisterView(self.content_area, self.db, self.session, self.config)
+        if tab_key == "gallery":
+            return ReceiptGalleryView(
+                self.content_area, self.db, self.session, self.config, on_navigate=self.switch_tab
+            )
         if tab_key == "settings":
             return SettingsAndBackupView(
                 self.content_area,
@@ -433,6 +560,13 @@ class MainWindow:
         if self.current_view is not None:
             self.current_view.pack(fill="both", expand=True)
 
+        if self.lbl_header_title is not None:
+            try:
+                if self.lbl_header_title.winfo_exists():
+                    self.lbl_header_title.configure(text=self._get_tab_title(tab_key))
+            except Exception:
+                pass
+
     def _on_tkinter_callback_exception(self, exc_type, exc_val, exc_tb):
         """Global error catcher: Logs full stacktrace and displays informative popup to ensure no silent crashes."""
         tb_text = "".join(traceback.format_exception(exc_type, exc_val, exc_tb))
@@ -480,6 +614,15 @@ class MainWindow:
                 messagebox.showerror("เกิดข้อผิดพลาดของระบบ", user_message)
             except Exception:
                 pass
+
+    def logout(self):
+        """Logs out the current user and triggers the re-login callback if configured."""
+        if self.on_logout is not None:
+            try:
+                self.on_logout()
+            except Exception:
+                pass
+        self.on_close()
 
     def on_close(self):
         if self.config.get("auto_backup_on_exit", True):

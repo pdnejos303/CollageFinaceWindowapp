@@ -53,6 +53,7 @@ from ui.components import (
 from ui.login_window import LoginWindow
 from ui.dashboard_view import DashboardView
 from ui.batch_class_view import BatchClassReceiptView
+from ui.receipt_gallery_view import ReceiptGalleryView
 from ui.views import (
     SmartReceiptPOSView,
     StudentAndFeeCatalogView,
@@ -404,6 +405,11 @@ class TestDashboardView(BaseUITestCase):
         self.assertIsNotNone(view.card_today_income)
         self.assertIsNotNone(view.card_total_income)
         self.assertIsNotNone(view.card_outstanding)
+
+        # Verify header and filter_bar are inside scroll_body so the whole page scrolls
+        self.assertEqual(str(view.header.master), str(view.scroll_body._parent_frame)) if hasattr(view.scroll_body, "_parent_frame") else self.assertIsNotNone(view.header)
+        self.assertIn(view.header.winfo_parent(), (str(view.scroll_body), str(getattr(view.scroll_body, "_parent_frame", ""))))
+        self.assertIn(view.filter_bar.winfo_parent(), (str(view.scroll_body), str(getattr(view.scroll_body, "_parent_frame", ""))))
 
         # Test filter selection
         view.selected_level_var.set("ปวช.1")
@@ -836,6 +842,90 @@ class TestCourseRegistrationView(BaseUITestCase):
         self.assertEqual(len(view.registered_courses), initial_count)
 
 
+class TestReceiptGalleryView(BaseUITestCase):
+    """Audits the In-App Receipt Image Gallery & Manager view."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.gallery_dir = os.path.join(self.temp_dir, "gallery")
+        os.makedirs(self.gallery_dir, exist_ok=True)
+        self.db_path = os.path.join(self.temp_dir, "test_gallery.db")
+        self.db = DatabaseManager(self.db_path)
+        self.session = UserSession(1, "admin", "ผู้ดูแลระบบ", "ADMIN", "การเงิน")
+        self.config = {
+            "college_name": "วิทยาลัยอาชีวศึกษาสุพรรณบุรี",
+            "default_export_folder": self.gallery_dir,
+        }
+
+        from PIL import Image
+        self.img1_path = os.path.join(self.gallery_dir, "Receipt_700605308_Test1.png")
+        self.img2_path = os.path.join(self.gallery_dir, "Receipt_999999999_Other.png")
+        Image.new("RGB", (200, 300), color=(255, 255, 255)).save(self.img1_path)
+        Image.new("RGB", (180, 240), color=(240, 248, 255)).save(self.img2_path)
+
+    def test_gallery_scan_preview_zoom_filter_and_manage(self):
+        if not self.root:
+            self.skipTest("Tkinter display not available")
+
+        view = ReceiptGalleryView(self.root, db=self.db, session=self.session, config=self.config)
+        view.pack()
+        self.root.update_idletasks()
+
+        self.assertEqual(len(view.all_records), 2)
+        self.assertEqual(len(view.filtered_records), 2)
+
+        # Select & zoom in-app
+        rec1 = next(r for r in view.filtered_records if r.file_path == os.path.abspath(self.img1_path))
+        view.select_record(rec1)
+        self.assertIsNotNone(view._preview_pil)
+        self.assertIsNotNone(view._preview_photo)
+        view.zoom_in()
+        self.assertEqual(view.zoom_mode, "manual")
+        view.zoom_actual()
+        self.assertEqual(view.zoom_scale, 1.0)
+        view.zoom_fit()
+        self.assertEqual(view.zoom_mode, "fit")
+
+        # Filter by query
+        view.search_var.set("700605308")
+        view.apply_filters()
+        self.assertEqual(len(view.filtered_records), 1)
+
+        # Reset filters & toggle view mode
+        view.reset_filters()
+        self.assertEqual(len(view.filtered_records), 2)
+        view.toggle_view_mode()
+        self.assertEqual(view.view_mode, "list")
+        view.toggle_view_mode()
+        self.assertEqual(view.view_mode, "grid")
+
+        # Change gallery folder with copy migration
+        new_dir = os.path.join(self.temp_dir, "gallery_new")
+        os.makedirs(new_dir, exist_ok=True)
+        with (
+            patch("ui.receipt_gallery_view.filedialog.askdirectory", return_value=new_dir),
+            patch("ui.receipt_gallery_view.save_config"),
+            patch("ui.receipt_gallery_view.messagebox.askyesnocancel", return_value=False),
+            patch("ui.receipt_gallery_view.show_toast"),
+        ):
+            view.change_gallery_folder()
+
+        self.assertEqual(self.config["default_export_folder"], os.path.abspath(new_dir))
+        self.assertEqual(len(view.all_records), 2)
+
+        # Delete selected image with confirmation
+        view.select_record(view.filtered_records[0])
+        target_path = view.selected_record.file_path
+        with (
+            patch("ui.receipt_gallery_view.messagebox.askyesno", return_value=True),
+            patch("ui.receipt_gallery_view.show_toast"),
+        ):
+            view.delete_selected()
+
+        self.assertFalse(os.path.exists(target_path))
+        self.assertEqual(len(view.all_records), 1)
+
+
 class TestMainWindow(BaseUITestCase):
     """Audits the primary single-root application window, sidebar collapsing, and error catcher."""
 
@@ -882,6 +972,45 @@ class TestMainWindow(BaseUITestCase):
                 raise ValueError("Test Synthetic System Error")
             except ValueError as ve:
                 main._on_tkinter_callback_exception(type(ve), ve, ve.__traceback__)
+
+    def test_main_window_header_profile_and_logout(self):
+        if not self.root:
+            self.skipTest("Tkinter display not available")
+
+        logout_called = []
+        main = MainWindow(
+            self.db,
+            self.session,
+            self.config,
+            on_logout=lambda: logout_called.append(True),
+        )
+        main.root = self.root
+        main.nav_buttons = {}
+        for k, full in main.nav_items_config:
+            main.nav_buttons[k] = ctk.CTkButton(self.root, text=full)
+
+        shell = ctk.CTkFrame(self.root)
+        shell.pack(fill="both", expand=True)
+        main._build_top_header(shell)
+        main.content_area = ctk.CTkFrame(shell)
+        main.content_area.pack(fill="both", expand=True)
+
+        # Verify user profile name, role badge, and logout button
+        self.assertEqual(main.lbl_user_name.cget("text"), self.session.full_name)
+        self.assertEqual(main.lbl_user_role.cget("text"), self.session.role)
+        self.assertEqual(main.btn_logout.cget("text"), "ออกจากระบบ")
+
+        # Verify header title updates on switch_tab
+        main.switch_tab("dashboard")
+        self.assertEqual(main.lbl_header_title.cget("text"), "ภาพรวมการเงิน")
+        main.switch_tab("pos")
+        self.assertEqual(main.lbl_header_title.cget("text"), "ออกใบเสร็จรับเงิน (POS)")
+
+        # Verify logout invokes on_logout and closes window via on_close
+        with patch.object(main, "on_close") as mock_close:
+            main.logout()
+            self.assertEqual(logout_called, [True])
+            mock_close.assert_called_once()
 
 
 if __name__ == "__main__":
