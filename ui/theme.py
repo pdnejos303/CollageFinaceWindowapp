@@ -8,10 +8,33 @@ class AppTheme:
     FONT_FAMILY = "Tahoma"
     FONT_MONO = "Consolas"
 
+    # Spacing & Control Sizing Tokens
+    SPACE_XS = 4
+    SPACE_SM = 8
+    SPACE_MD = 16
+    SPACE_LG = 24
+
+    CTRL_H_SM = 32
+    CTRL_H_MD = 36
+    CTRL_H_LG = 42
+
+    # Typography Tokens
+    FONT_TITLE = (FONT_FAMILY, 18, "bold")
+    FONT_SECTION = (FONT_FAMILY, 14, "bold")
+    FONT_BODY = (FONT_FAMILY, 13)
+    FONT_LABEL = (FONT_FAMILY, 12, "bold")
+    FONT_CAPTION = (FONT_FAMILY, 11)
+
+    # Corner Radius (Pure Flat Rectangular Design - No Rounded Clutter)
+    RADIUS = 0
+    RADIUS_CARD = 0
+    RADIUS_BTN = 0
+    RADIUS_INPUT = 0
+
     # 1. App Surfaces (Warm-Cool Corporate Slate)
-    COLOR_BG = "#F1F5F9"            # Main workspace background (Slate 100)
+    COLOR_BG = "#F8FAFC"            # Main workspace background (Slate 50 - calm & airy)
     COLOR_SURFACE = "#FFFFFF"       # Primary card surface (Pure White)
-    COLOR_SURFACE_ALT = "#F8FAFC"   # Secondary panel / subtle strip (Slate 50)
+    COLOR_SURFACE_ALT = "#F1F5F9"   # Secondary panel / subtle strip (Slate 100)
     COLOR_SURFACE_MUTED = "#F1F5F9" # Input / control background
 
     # 2. Sidebar Navigation (Deep Executive Navy)
@@ -85,3 +108,34 @@ class AppTheme:
     @classmethod
     def format_status(cls, code: str) -> str:
         return cls.STATUS_THAI_MAP.get((code or "").upper(), code)
+
+    @classmethod
+    def apply_sharp_theme(cls):
+        """
+        Forces all CustomTkinter widgets across the entire system to have
+        pure sharp rectangular edges (corner_radius = 0, no rounded corners).
+        """
+        try:
+            import customtkinter as ctk
+            for _widget_name, props in ctk.ThemeManager.theme.items():
+                if isinstance(props, dict):
+                    for k in list(props.keys()):
+                        if "corner_radius" in k:
+                            props[k] = 0
+        except Exception:
+            pass
+
+
+# Automatically hook and apply pure sharp rectangular geometry across CustomTkinter
+try:
+    import customtkinter as _ctk
+    _orig_set_default_color_theme = _ctk.set_default_color_theme
+
+    def _set_default_color_theme_sharp(theme):
+        _orig_set_default_color_theme(theme)
+        AppTheme.apply_sharp_theme()
+
+    _ctk.set_default_color_theme = _set_default_color_theme_sharp
+    AppTheme.apply_sharp_theme()
+except Exception:
+    pass

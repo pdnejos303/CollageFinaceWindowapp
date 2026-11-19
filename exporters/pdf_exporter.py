@@ -10,7 +10,7 @@ from core.config import (
     normalize_template_style,
     thai_baht_text,
 )
-from exporters.base import BaseFinanceExporter
+from exporters.base import BaseFinanceExporter, safe_float, safe_int, safe_str
 
 try:
     from fpdf import FPDF
@@ -91,7 +91,8 @@ class PdfReceiptExporter(BaseFinanceExporter):
             raise RuntimeError("Module 'fpdf2' is not installed.")
 
         os.makedirs(os.path.dirname(os.path.abspath(self.save_path)), exist_ok=True)
-        meta = metadata or {}
+        meta = metadata if isinstance(metadata, dict) else {}
+        data = data if isinstance(data, dict) else {}
 
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -101,7 +102,7 @@ class PdfReceiptExporter(BaseFinanceExporter):
             font_family, _ = _setup_thai_sarabun_fonts(pdf)
 
             pdf.add_page()
-            report_type = data.get("report_type", "RECEIPT")
+            report_type = safe_str(data.get("report_type") or "RECEIPT")
             raw_style = data.get("template_style") or meta.get("bill_template_style") or load_config().get("bill_template_style", "CLASSIC")
             style = normalize_template_style(raw_style)
 
@@ -128,11 +129,11 @@ class PdfReceiptExporter(BaseFinanceExporter):
     def export_batch(self, receipts_list: List[Dict[str, Any]], metadata: Dict[str, Any] = None) -> str:
         if FPDF is None:
             raise RuntimeError("Module 'fpdf2' is not installed.")
-        if not receipts_list:
+        if not receipts_list or not isinstance(receipts_list, list):
             raise ValueError("ไม่มีข้อมูลใบเสร็จสำหรับพิมพ์")
 
         os.makedirs(os.path.dirname(os.path.abspath(self.save_path)), exist_ok=True)
-        meta = metadata or {}
+        meta = metadata if isinstance(metadata, dict) else {}
 
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -143,6 +144,7 @@ class PdfReceiptExporter(BaseFinanceExporter):
 
             for rcp_data in receipts_list:
                 pdf.add_page()
+                rcp_data = rcp_data if isinstance(rcp_data, dict) else {}
                 raw_style = rcp_data.get("template_style") or meta.get("bill_template_style") or load_config().get("bill_template_style", "CLASSIC")
                 style = normalize_template_style(raw_style)
                 if rcp_data.get("report_type") == "COURSE_REGISTRATION":
@@ -202,18 +204,15 @@ class PdfReceiptExporter(BaseFinanceExporter):
 
         pdf.set_xy(right_x, y1)
         pdf.set_font(font_family, "", sz_body)
-        pdf.cell(16, 7.5, "เลขที่", align="L")
-        pdf.cell(45, 7.5, rcp_no, align="L")
+        pdf.cell(60, 7.5, f"เลขที่  {rcp_no}", align="L")
 
         # Row 2: ในราชการกรมอาชีวศึกษา  |  ที่ทำการ  วิทยาลัยอาชีวศึกษาสุพรรณบุรี
         y2 = 22.5
         pdf.set_xy(left_x, y2)
-        pdf.set_font(font_family, "", sz_body)
         pdf.cell(75, 7.0, "ในราชการกรมอาชีวศึกษา", align="L")
 
         pdf.set_xy(right_x, y2)
-        pdf.cell(18, 7.0, "ที่ทำการ", align="L")
-        pdf.cell(48, 7.0, college, align="L")
+        pdf.cell(60, 7.0, f"ที่ทำการ  {college}", align="L")
 
         # Row 3: กระทรวงศึกษาธิการ  |  วันที่  30/10/2569
         y3 = 30.0
@@ -221,38 +220,31 @@ class PdfReceiptExporter(BaseFinanceExporter):
         pdf.cell(75, 7.0, "กระทรวงศึกษาธิการ", align="L")
 
         pdf.set_xy(right_x, y3)
-        pdf.cell(16, 7.0, "วันที่", align="L")
-        pdf.cell(48, 7.0, rcp_date_th, align="L")
+        pdf.cell(60, 7.0, f"วันที่  {rcp_date_th}", align="L")
 
         # Row 4: ได้รับเงินจาก  นางสาวปรันดา เจียศิริพันธ์  |  รหัสประจำตัว  69219100049
         y4 = 38.0
         pdf.set_xy(left_x, y4)
-        pdf.cell(26, 7.0, "ได้รับเงินจาก", align="L")
-        pdf.cell(85, 7.0, stu_name, align="L")
+        pdf.cell(75, 7.0, f"ได้รับเงินจาก  {stu_name}", align="L")
 
         pdf.set_xy(right_x, y4)
-        pdf.cell(25, 7.0, "รหัสประจำตัว", align="L")
-        pdf.cell(40, 7.0, stu_code, align="L")
+        pdf.cell(60, 7.0, f"รหัสประจำตัว  {stu_code}", align="L")
 
         # Row 5: ภาค/ปีการศึกษา  2/2569  |  คณะ  พาณิชยกรรม/บริหารธุรกิจ
         y5 = 46.0
         pdf.set_xy(left_x, y5)
-        pdf.cell(31, 7.0, "ภาค/ปีการศึกษา", align="L")
-        pdf.cell(60, 7.0, term_code, align="L")
+        pdf.cell(75, 7.0, f"ภาค/ปีการศึกษา  {term_code}", align="L")
 
         pdf.set_xy(right_x, y5)
-        pdf.cell(14, 7.0, "คณะ", align="L")
-        pdf.cell(52, 7.0, faculty_name, align="L")
+        pdf.cell(60, 7.0, f"คณะ  {faculty_name}", align="L")
 
         # Row 6: แผนกวิชา  เทคโนโลยีธุรกิจดิจิทัล  |  ชั้น  ปวช.1
         y6 = 54.0
         pdf.set_xy(left_x, y6)
-        pdf.cell(21, 7.0, "แผนกวิชา", align="L")
-        pdf.cell(85, 7.0, major_name, align="L")
+        pdf.cell(75, 7.0, f"แผนกวิชา  {major_name}", align="L")
 
         pdf.set_xy(right_x, y6)
-        pdf.cell(12, 7.0, "ชั้น", align="L")
-        pdf.cell(52, 7.0, cls_grp, align="L")
+        pdf.cell(60, 7.0, f"ชั้น  {cls_grp}", align="L")
 
         # 3. Items Table Header (Top & bottom horizontal lines like EXofBill)
         hdr_top_y = 64.5
@@ -269,13 +261,14 @@ class PdfReceiptExporter(BaseFinanceExporter):
         pdf.cell(47.0, 6.8, "จำนวนเงิน", align="R")
 
         # 4. Items Rows
-        items: List[Dict[str, Any]] = data.get("items", [])
+        items: List[Dict[str, Any]] = data.get("items", []) or []
         if not items:
-            amt_v = float(data.get("net_total_amount", data.get("amount", 0.0)))
+            amt_raw = data.get("net_total_amount") if data.get("net_total_amount") is not None else data.get("amount")
+            amt_v = safe_float(amt_raw)
             items = [
                 {
                     "line_no": 1,
-                    "item_name": data.get("title", "ชำระค่าธรรมเนียมการศึกษา"),
+                    "item_name": safe_str(data.get("title") or "ชำระค่าธรรมเนียมการศึกษา"),
                     "quantity": 1,
                     "unit_price": amt_v,
                     "discount": 0.0,
@@ -287,14 +280,19 @@ class PdfReceiptExporter(BaseFinanceExporter):
         pdf.set_font(font_family, "", sz_body)
 
         for it in items:
-            iname = str(it.get("item_name", "")).strip()
-            qty = float(it.get("quantity", 1.0))
-            uprice = float(it.get("unit_price", 0.0))
-            ltotal = float(it.get("line_total", 0.0))
+            it_dict = it if isinstance(it, dict) else {}
+            iname = safe_str(it_dict.get("item_name"))
+            qty = safe_float(it_dict.get("quantity"), default=1.0)
+            uprice = safe_float(it_dict.get("unit_price"))
+            ltotal = safe_float(it_dict.get("line_total"))
             if qty > 1.0:
                 iname_display = f"{iname} ({qty:,.0f} หน่วย x {uprice:,.2f})"
             else:
                 iname_display = iname
+
+            # Protect against text overflow colliding with amount column
+            if len(iname_display) > 65:
+                iname_display = iname_display[:62] + "..."
 
             pdf.set_xy(16.0, cur_y)
             pdf.cell(132.0, 7.0, iname_display, align="L")
@@ -318,7 +316,8 @@ class PdfReceiptExporter(BaseFinanceExporter):
         total_top_y = max(cur_y + 8.0, 252.0)
         total_btm_y = total_top_y + 9.0
 
-        net_val = float(data.get("net_total_amount", data.get("amount", 0.0)))
+        net_raw = data.get("net_total_amount") if data.get("net_total_amount") is not None else data.get("amount")
+        net_val = safe_float(net_raw)
         baht_txt = data.get("amount_text_th") or thai_baht_text(net_val)
 
         pdf.set_draw_color(0, 0, 0)
@@ -450,7 +449,7 @@ class PdfReceiptExporter(BaseFinanceExporter):
             pdf.cell(col_w[c_i], 6.0, h_txt, border=1, align="C")
         cur_y = tbl_y + 6.0
 
-        courses: List[Dict[str, Any]] = data.get("courses", [])
+        courses: List[Dict[str, Any]] = data.get("courses", []) or []
         tot_t = 0
         tot_p = 0
         tot_c = 0
@@ -459,12 +458,12 @@ class PdfReceiptExporter(BaseFinanceExporter):
         for idx in range(1, 16):
             pdf.set_xy(tbl_x, cur_y)
             if idx <= len(courses):
-                c_item = courses[idx - 1]
-                ccode = str(c_item.get("course_code", "")).strip()
-                cname = str(c_item.get("course_name", "")).strip()
-                t_val = int(float(c_item.get("theory_hours", 0)))
-                p_val = int(float(c_item.get("practice_hours", 0)))
-                c_val = int(float(c_item.get("credits", 0)))
+                c_item = courses[idx - 1] if isinstance(courses[idx - 1], dict) else {}
+                ccode = safe_str(c_item.get("course_code"))
+                cname = safe_str(c_item.get("course_name"))
+                t_val = safe_int(c_item.get("theory_hours"))
+                p_val = safe_int(c_item.get("practice_hours"))
+                c_val = safe_int(c_item.get("credits"))
                 tot_t += t_val
                 tot_p += p_val
                 tot_c += c_val
@@ -509,8 +508,9 @@ class PdfReceiptExporter(BaseFinanceExporter):
         fee_total = 0.0
         pdf.set_font(font_family, "", sz_sm)
         for f_it in fee_items:
-            fname = str(f_it.get("item_name", "")).strip()
-            famt = float(f_it.get("line_total", f_it.get("unit_price", 0.0)))
+            f_dict = f_it if isinstance(f_it, dict) else {}
+            fname = safe_str(f_dict.get("item_name"))
+            famt = safe_float(f_dict.get("line_total") if f_dict.get("line_total") is not None else f_dict.get("unit_price"))
             fee_total += famt
             pdf.set_xy(fee_x, fee_y)
             pdf.cell(86.0, 5.4, f"  {fname}", border=1, align="L")
@@ -774,29 +774,20 @@ class PdfReceiptExporter(BaseFinanceExporter):
         hdr_btm_y = hdr_top_y + hdr_h
         col_split_x = 152.0
 
-        items: List[Dict[str, Any]] = data.get("items", [])
+        items: List[Dict[str, Any]] = data.get("items", []) or []
         if not items:
-            amt_v = float(data.get("net_total_amount", data.get("amount", 0.0)))
+            amt_raw = data.get("net_total_amount") if data.get("net_total_amount") is not None else data.get("amount")
+            amt_v = safe_float(amt_raw)
             items = [
                 {
                     "line_no": 1,
-                    "item_name": data.get("title", "ชำระค่าธรรมเนียมการศึกษา"),
+                    "item_name": safe_str(data.get("title") or "ชำระค่าธรรมเนียมการศึกษา"),
                     "quantity": 1,
                     "unit_price": amt_v,
                     "discount": 0.0,
                     "line_total": amt_v,
                 }
             ]
-
-        total_top_y = 250.0
-        total_h = 9.5
-        total_btm_y = total_top_y + total_h
-
-        # Outer Table Frame from Header down to Total Bar
-        pdf.set_draw_color(203, 213, 225)
-        pdf.set_line_width(0.3)
-        pdf.rect(16.0, hdr_top_y, 178.0, total_top_y - hdr_top_y, style="D")
-        pdf.line(col_split_x, hdr_top_y, col_split_x, total_top_y)
 
         # Header Fill (Deep Navy)
         pdf.set_fill_color(15, 23, 42)
@@ -818,14 +809,19 @@ class PdfReceiptExporter(BaseFinanceExporter):
         pdf.set_font(font_family, "", sz_body)
 
         for idx, it in enumerate(items):
-            iname = str(it.get("item_name", "")).strip()
-            qty = float(it.get("quantity", 1.0))
-            uprice = float(it.get("unit_price", 0.0))
-            ltotal = float(it.get("line_total", 0.0))
+            it_dict = it if isinstance(it, dict) else {}
+            iname = safe_str(it_dict.get("item_name"))
+            qty = safe_float(it_dict.get("quantity"), default=1.0)
+            uprice = safe_float(it_dict.get("unit_price"))
+            ltotal = safe_float(it_dict.get("line_total"))
             if qty > 1.0:
                 iname_display = f"{iname} ({qty:,.0f} หน่วย x {uprice:,.2f})"
             else:
                 iname_display = iname
+
+            # Protect against text overflow colliding with amount column
+            if len(iname_display) > 65:
+                iname_display = iname_display[:62] + "..."
 
             if idx % 2 == 1:
                 pdf.set_fill_color(248, 250, 252)
@@ -844,6 +840,16 @@ class PdfReceiptExporter(BaseFinanceExporter):
             pdf.cell(194.0 - col_split_x - 5.0, 6.8, f"{ltotal:,.2f}", align="R")
             cur_y += row_h
 
+        total_top_y = max(cur_y + 4.0, 250.0)
+        total_h = 9.5
+        total_btm_y = total_top_y + total_h
+
+        # Outer Table Frame from Header down to Total Bar
+        pdf.set_draw_color(203, 213, 225)
+        pdf.set_line_width(0.3)
+        pdf.rect(16.0, hdr_top_y, 178.0, total_top_y - hdr_top_y, style="D")
+        pdf.line(col_split_x, hdr_top_y, col_split_x, total_top_y)
+
         if raw_status == "VOIDED":
             pdf.set_text_color(185, 28, 28)
             pdf.set_font(font_family, "B", sz_tbl_hdr)
@@ -854,11 +860,13 @@ class PdfReceiptExporter(BaseFinanceExporter):
         if data.get("remark"):
             pdf.set_font(font_family, "", sz_body - 1)
             pdf.set_text_color(71, 85, 105)
-            pdf.set_xy(20.0, total_top_y - 8.0)
+            rem_y = min(total_top_y - 7.5, max(cur_y + 2.0, total_top_y - 8.0))
+            pdf.set_xy(20.0, rem_y)
             pdf.cell(130.0, 6.5, f"หมายเหตุ: {data.get('remark')}", align="L")
 
         # 5. Bottom Total Bar — Anchored near bottom edge of A4 (Y=250.0mm)
-        net_val = float(data.get("net_total_amount", data.get("amount", 0.0)))
+        net_raw = data.get("net_total_amount") if data.get("net_total_amount") is not None else data.get("amount")
+        net_val = safe_float(net_raw)
         baht_txt = data.get("amount_text_th") or thai_baht_text(net_val)
 
         pdf.set_fill_color(241, 245, 249)
@@ -1055,12 +1063,12 @@ class PdfReceiptExporter(BaseFinanceExporter):
                 pdf.set_fill_color(255, 255, 255)
 
             if idx <= len(courses):
-                c_item = courses[idx - 1]
-                ccode = str(c_item.get("course_code", "")).strip()
-                cname = str(c_item.get("course_name", "")).strip()
-                t_val = int(float(c_item.get("theory_hours", 0)))
-                p_val = int(float(c_item.get("practice_hours", 0)))
-                c_val = int(float(c_item.get("credits", 0)))
+                c_item = courses[idx - 1] if isinstance(courses[idx - 1], dict) else {}
+                ccode = safe_str(c_item.get("course_code"))
+                cname = safe_str(c_item.get("course_name"))
+                t_val = safe_int(c_item.get("theory_hours"))
+                p_val = safe_int(c_item.get("practice_hours"))
+                c_val = safe_int(c_item.get("credits"))
                 tot_t += t_val
                 tot_p += p_val
                 tot_c += c_val
@@ -1108,8 +1116,9 @@ class PdfReceiptExporter(BaseFinanceExporter):
         pdf.set_draw_color(148, 163, 184)
         pdf.set_font(font_family, "", sz_sm)
         for f_idx, f_it in enumerate(fee_items):
-            fname = str(f_it.get("item_name", "")).strip()
-            famt = float(f_it.get("line_total", f_it.get("unit_price", 0.0)))
+            f_dict = f_it if isinstance(f_it, dict) else {}
+            fname = safe_str(f_dict.get("item_name"))
+            famt = safe_float(f_dict.get("line_total") if f_dict.get("line_total") is not None else f_dict.get("unit_price"))
             fee_total += famt
             if f_idx % 2 == 1:
                 pdf.set_fill_color(248, 250, 252)
@@ -1270,10 +1279,12 @@ class PdfReceiptExporter(BaseFinanceExporter):
     def _render_daily_closing(self, pdf, font_family: str, data: Dict[str, Any]):
         is_sarabun = font_family == "THSarabun"
         sz = 15 if is_sarabun else 10.5
-        inc_val = float(data.get("income_total", 0.0))
+        data = data if isinstance(data, dict) else {}
+        inc_val = safe_float(data.get("income_total"))
+        tx_cnt = safe_int(data.get("tx_count"))
         s_rows = [
             ("วันที่ออกใบเสร็จ (Report Date):", format_receipt_date_thai(data.get("date", "-"))),
-            ("จำนวนใบเสร็จที่รับชำระทั้งหมด:", f"{data.get('tx_count', 0)} ฉบับ"),
+            ("จำนวนใบเสร็จที่รับชำระทั้งหมด:", f"{tx_cnt} ฉบับ"),
             ("ยอดรวมเงินรับสุทธิประจำวัน:", f"{inc_val:,.2f} บาท ({thai_baht_text(inc_val)})"),
         ]
         pdf.set_draw_color(203, 213, 225)
@@ -1287,22 +1298,22 @@ class PdfReceiptExporter(BaseFinanceExporter):
             pdf.cell(110, 8, f"  {v}", border=1, new_x="LMARGIN", new_y="NEXT", fill=True)
 
         pdf.ln(5)
-        by_method: Dict[str, float] = data.get("income_by_method", {})
-        if by_method:
+        by_method: Dict[str, float] = data.get("income_by_method", {}) or {}
+        if by_method and isinstance(by_method, dict):
             pdf.set_font(font_family, "B", sz)
             pdf.cell(180, 7, "1. แยกยอดเงินรับตามช่องทางการชำระเงิน:", new_x="LMARGIN", new_y="NEXT")
             pdf.set_font(font_family, "", sz)
             for method_name, amt_val in by_method.items():
-                pdf.cell(180, 6.5, f"    - {method_name}:  {float(amt_val):,.2f} บาท", new_x="LMARGIN", new_y="NEXT")
+                pdf.cell(180, 6.5, f"    - {safe_str(method_name)}:  {safe_float(amt_val):,.2f} บาท", new_x="LMARGIN", new_y="NEXT")
 
-        by_fee: Dict[str, float] = data.get("income_by_fee_item", {})
-        if by_fee:
+        by_fee: Dict[str, float] = data.get("income_by_fee_item", {}) or {}
+        if by_fee and isinstance(by_fee, dict):
             pdf.ln(3)
             pdf.set_font(font_family, "B", sz)
             pdf.cell(180, 7, "2. แยกยอดเงินรับตามหมวดรายการค่าธรรมเนียมในใบเสร็จ:", new_x="LMARGIN", new_y="NEXT")
             pdf.set_font(font_family, "", sz)
             for fee_name, amt_val in by_fee.items():
-                pdf.cell(180, 6.5, f"    - {fee_name}:  {float(amt_val):,.2f} บาท", new_x="LMARGIN", new_y="NEXT")
+                pdf.cell(180, 6.5, f"    - {safe_str(fee_name)}:  {safe_float(amt_val):,.2f} บาท", new_x="LMARGIN", new_y="NEXT")
 
     def _render_daily_signature(self, pdf, font_family: str, data: Dict[str, Any], meta: Dict[str, Any]):
         is_sarabun = font_family == "THSarabun"

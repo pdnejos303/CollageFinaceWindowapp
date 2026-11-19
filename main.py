@@ -1,10 +1,21 @@
 import os
 import sys
 
+if sys.platform == "win32":
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("spvc.collegefinance.godapp.2")
+    except Exception:
+        pass
+
 from core.config import get_base_dir, load_config
 from core.database import DatabaseManager
 from core.models import UserSession
+from ui.notifications import patch_tkinter_messagebox
 from ui.main_window import MainWindow
+
+# Apply modern dialog theme to all popups
+patch_tkinter_messagebox()
 
 
 class DummyStream:
@@ -45,8 +56,19 @@ class CollegeFinanceGodApp:
 
 
 def main():
-    app = CollegeFinanceGodApp()
-    app.run()
+    try:
+        app = CollegeFinanceGodApp()
+        app.run()
+    except Exception as e:
+        import traceback
+        import tkinter.messagebox as mb
+        tb = traceback.format_exc()
+        try:
+            with open(os.path.join(get_base_dir(), "data", "startup_error.log"), "a", encoding="utf-8") as f:
+                f.write(f"\nSTARTUP ERROR:\n{tb}\n")
+        except Exception:
+            pass
+        mb.showerror("เกิดข้อผิดพลาดในการเริ่มต้นโปรแกรม", f"ไม่สามารถเปิดโปรแกรมได้:\n{e}\n\n{tb}")
 
 
 if __name__ == "__main__":

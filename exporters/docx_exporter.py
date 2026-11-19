@@ -8,7 +8,7 @@ from core.config import (
     normalize_template_style,
     thai_baht_text,
 )
-from exporters.base import BaseFinanceExporter
+from exporters.base import BaseFinanceExporter, safe_float, safe_int, safe_str
 
 try:
     import docx
@@ -64,6 +64,8 @@ def set_cell_borders(cell, top=None, bottom=None, left=None, right=None):
 
 
 def _resolve_faculty_and_major(data: Dict[str, Any]) -> tuple[str, str]:
+    if not isinstance(data, dict):
+        return "พาณิชยกรรม/บริหารธุรกิจ", "เทคโนโลยีธุรกิจดิจิทัล"
     faculty = (
         data.get("faculty")
         or data.get("snapshot_department")
@@ -86,11 +88,12 @@ class DocxReceiptExporter(BaseFinanceExporter):
             raise RuntimeError("Module 'python-docx' is not installed.")
 
         os.makedirs(os.path.dirname(os.path.abspath(self.save_path)), exist_ok=True)
-        meta = metadata or {}
+        meta = metadata if isinstance(metadata, dict) else {}
+        data = data if isinstance(data, dict) else {}
         doc = Document()
         self._configure_page_margins(doc)
 
-        report_type = data.get("report_type", "RECEIPT")
+        report_type = safe_str(data.get("report_type") or "RECEIPT")
         raw_style = data.get("template_style") or meta.get("bill_template_style") or load_config().get("bill_template_style", "CLASSIC")
         style = normalize_template_style(raw_style)
 
@@ -115,17 +118,18 @@ class DocxReceiptExporter(BaseFinanceExporter):
     def export_batch(self, receipts_list: List[Dict[str, Any]], metadata: Dict[str, Any] = None) -> str:
         if docx is None:
             raise RuntimeError("Module 'python-docx' is not installed.")
-        if not receipts_list:
+        if not receipts_list or not isinstance(receipts_list, list):
             raise ValueError("ไม่มีข้อมูลใบเสร็จสำหรับพิมพ์")
 
         os.makedirs(os.path.dirname(os.path.abspath(self.save_path)), exist_ok=True)
-        meta = metadata or {}
+        meta = metadata if isinstance(metadata, dict) else {}
         doc = Document()
         self._configure_page_margins(doc)
 
         for idx, rcp_data in enumerate(receipts_list):
             if idx > 0:
                 doc.add_page_break()
+            rcp_data = rcp_data if isinstance(rcp_data, dict) else {}
             raw_style = rcp_data.get("template_style") or meta.get("bill_template_style") or load_config().get("bill_template_style", "CLASSIC")
             style = normalize_template_style(raw_style)
             if rcp_data.get("report_type") == "COURSE_REGISTRATION":
@@ -154,15 +158,15 @@ class DocxReceiptExporter(BaseFinanceExporter):
     # ==========================================================================
     def _render_official_ex_bill(self, doc, data: Dict[str, Any], meta: Dict[str, Any]):
         college = (self.college_name or meta.get("college_name", "วิทยาลัยอาชีวศึกษาสุพรรณบุรี")).strip()
-        rcp_no = str(data.get("receipt_no", data.get("tx_code", "-"))).strip()
+        rcp_no = str(data.get("receipt_no", data.get("tx_code", "-")) or "-").strip()
         raw_date = data.get("receipt_date", data.get("tx_date", ""))
         rcp_date_th = format_receipt_date_thai(raw_date)
-        term_code = str(data.get("term_code", meta.get("current_semester", "2/2569"))).strip()
-        stu_name = str(data.get("full_name", data.get("snapshot_student_name", "-"))).strip()
-        stu_code = str(data.get("student_code", "-")).strip()
-        cls_grp = str(data.get("class_group", data.get("snapshot_class_group", data.get("education_level", "ปวช.1")))).strip()
+        term_code = str(data.get("term_code", meta.get("current_semester", "2/2569")) or "2/2569").strip()
+        stu_name = str(data.get("full_name", data.get("snapshot_student_name", "-")) or "-").strip()
+        stu_code = str(data.get("student_code", "-") or "-").strip()
+        cls_grp = str(data.get("class_group", data.get("snapshot_class_group", data.get("education_level", "ปวช.1"))) or "ปวช.1").strip()
         faculty_name, major_name = _resolve_faculty_and_major(data)
-        position = (data.get("cashier_position") or meta.get("cashier_position", "ครู")).strip()
+        position = (data.get("cashier_position") or meta.get("cashier_position", "ครู") or "ครู").strip()
         garuda_path = get_garuda_emblem_path()
 
         # 1. Top Header 3-Column Table (Left Info | Center Garuda | Right Info)
@@ -212,13 +216,14 @@ class DocxReceiptExporter(BaseFinanceExporter):
         doc.add_paragraph().paragraph_format.space_after = Pt(2)
 
         # 2. Items Table (รายการ | จำนวนเงิน) matching EXofBill
-        items: List[Dict[str, Any]] = data.get("items", [])
+        items: List[Dict[str, Any]] = data.get("items", []) or []
         if not items:
-            amt_v = float(data.get("net_total_amount", data.get("amount", 0.0)))
+            amt_raw = data.get("net_total_amount") if data.get("net_total_amount") is not None else data.get("amount")
+            amt_v = safe_float(amt_raw)
             items = [
                 {
                     "line_no": 1,
-                    "item_name": data.get("title", "ชำระค่าธรรมเนียมการศึกษา"),
+                    "item_name": safe_str(data.get("title") or "ชำระค่าธรรมเนียมการศึกษา"),
                     "quantity": 1,
                     "unit_price": amt_v,
                     "discount": 0.0,
@@ -256,10 +261,10 @@ class DocxReceiptExporter(BaseFinanceExporter):
             set_cell_borders(c0)
             set_cell_borders(c1)
 
-            iname = str(it.get("item_name", "")).strip()
-            qty = float(it.get("quantity", 1.0))
-            uprice = float(it.get("unit_price", 0.0))
-            ltotal = float(it.get("line_total", 0.0))
+            iname = safe_str(it.get("item_name") if isinstance(it, dict) else "")
+            qty = safe_float(it.get("quantity") if isinstance(it, dict) else 1.0, default=1.0)
+            uprice = safe_float(it.get("unit_price") if isinstance(it, dict) else 0.0)
+            ltotal = safe_float(it.get("line_total") if isinstance(it, dict) else 0.0)
             iname_display = f"{iname} ({qty:,.0f} หน่วย x {uprice:,.2f})" if qty > 1.0 else iname
 
             p0 = c0.paragraphs[0]
@@ -285,7 +290,8 @@ class DocxReceiptExporter(BaseFinanceExporter):
             bp.paragraph_format.space_after = Pt(3)
 
         # Total Row
-        net_val = float(data.get("net_total_amount", data.get("amount", 0.0)))
+        net_raw = data.get("net_total_amount") if data.get("net_total_amount") is not None else data.get("amount")
+        net_val = safe_float(net_raw)
         baht_txt = data.get("amount_text_th") or thai_baht_text(net_val)
 
         tc0, tc1 = item_table.rows[total_rows - 1].cells
@@ -333,17 +339,17 @@ class DocxReceiptExporter(BaseFinanceExporter):
     # ==========================================================================
     def _render_course_registration_card(self, doc, data: Dict[str, Any], meta: Dict[str, Any]):
         college = (self.college_name or meta.get("college_name", "วิทยาลัยอาชีวศึกษาสุพรรณบุรี")).strip()
-        stu_code = str(data.get("student_code", "69219100049")).strip()
-        stu_name = str(data.get("full_name", "นางสาวปรันดา เจียศิริพันธ์")).strip()
-        cls_grp = str(data.get("class_group", "ปวช. 1/2")).strip()
-        fiscal_yr = str(data.get("fiscal_year", meta.get("fiscal_year", "2569"))).strip()
-        major_name = str(data.get("major", "เทคโนโลยีธุรกิจดิจิทัล")).strip()
-        subject_type = str(data.get("subject_type", "อุตสาหกรรมดิจิทัลและเทคโนโลยีสารสนเทศ")).strip()
-        career_group = str(data.get("career_group", "ธุรกิจดิจิทัลและพาณิชย์อิเล็กทรอนิกส์")).strip()
-        bank_acc = str(data.get("bank_account", "747-6-00234-2")).strip()
-        bank_code = str(data.get("bank_code", "80215")).strip()
-        ontime_dates = str(data.get("ontime_dates", "12-16 ตุลาคม 2569")).strip()
-        late_dates = str(data.get("late_dates", "19-21 ตุลาคม 2569")).strip()
+        stu_code = safe_str(data.get("student_code") or "69219100049")
+        stu_name = safe_str(data.get("full_name") or "นางสาวปรันดา เจียศิริพันธ์")
+        cls_grp = safe_str(data.get("class_group") or "ปวช. 1/2")
+        fiscal_yr = safe_str(data.get("fiscal_year") or meta.get("fiscal_year", "2569"))
+        major_name = safe_str(data.get("major") or "เทคโนโลยีธุรกิจดิจิทัล")
+        subject_type = safe_str(data.get("subject_type") or "อุตสาหกรรมดิจิทัลและเทคโนโลยีสารสนเทศ")
+        career_group = safe_str(data.get("career_group") or "ธุรกิจดิจิทัลและพาณิชย์อิเล็กทรอนิกส์")
+        bank_acc = safe_str(data.get("bank_account") or "747-6-00234-2")
+        bank_code = safe_str(data.get("bank_code") or "80215")
+        ontime_dates = safe_str(data.get("ontime_dates") or "12-16 ตุลาคม 2569")
+        late_dates = safe_str(data.get("late_dates") or "19-21 ตุลาคม 2569")
 
         top_p = doc.add_paragraph()
         top_p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
@@ -390,7 +396,7 @@ class DocxReceiptExporter(BaseFinanceExporter):
         )
         set_thai_font(r_sub, 12.5, bold=True)
 
-        courses: List[Dict[str, Any]] = data.get("courses", [])
+        courses: List[Dict[str, Any]] = data.get("courses", []) or []
         c_table = doc.add_table(rows=17, cols=6)
         c_table.alignment = WD_TABLE_ALIGNMENT.CENTER
         b_spec = {"val": "single", "sz": 4, "color": "000000"}
@@ -409,14 +415,14 @@ class DocxReceiptExporter(BaseFinanceExporter):
             for cell in row_cells:
                 set_cell_borders(cell, top=b_spec, bottom=b_spec, left=b_spec, right=b_spec)
             if idx <= len(courses):
-                c_it = courses[idx - 1]
-                t_v = int(float(c_it.get("theory_hours", 0)))
-                p_v = int(float(c_it.get("practice_hours", 0)))
-                c_v = int(float(c_it.get("credits", 0)))
+                c_it = courses[idx - 1] if isinstance(courses[idx - 1], dict) else {}
+                t_v = safe_int(c_it.get("theory_hours"))
+                p_v = safe_int(c_it.get("practice_hours"))
+                c_v = safe_int(c_it.get("credits"))
                 tot_t += t_v
                 tot_p += p_v
                 tot_c += c_v
-                vals = [str(idx), str(c_it.get("course_code", "")), str(c_it.get("course_name", "")), str(t_v), str(p_v), str(c_v)]
+                vals = [str(idx), safe_str(c_it.get("course_code")), safe_str(c_it.get("course_name")), str(t_v), str(p_v), str(c_v)]
             else:
                 vals = [str(idx), "", "", "", "", ""]
             for ci, v_str in enumerate(vals):
@@ -438,14 +444,19 @@ class DocxReceiptExporter(BaseFinanceExporter):
             {"item_name": "ค่าจ้างครูหรือผู้ที่มีความเชี่ยวชาญในสาขาเฉพาะ", "line_total": 500.0},
             {"item_name": "ค่ารักษาสภาพแวดล้อม", "line_total": 330.0},
         ]
-        fee_total = sum(float(f.get("line_total", f.get("unit_price", 0.0))) for f in fee_items)
+        fee_total = sum(
+            safe_float(f.get("line_total") if f.get("line_total") is not None else f.get("unit_price"))
+            for f in fee_items if isinstance(f, dict)
+        )
 
         fp = doc.add_paragraph()
         fp.paragraph_format.space_before = Pt(4)
+        fee_desc = ", ".join(
+            f"{safe_str(f.get('item_name'))} ({safe_float(f.get('line_total') if f.get('line_total') is not None else f.get('unit_price')):,.0f} บาท)"
+            for f in fee_items if isinstance(f, dict)
+        )
         r_ft = fp.add_run(
-            f"ค่าธรรมเนียมการศึกษา: "
-            + ", ".join(f"{f.get('item_name')} ({float(f.get('line_total', 0)):,.0f} บาท)" for f in fee_items)
-            + f"  |  รวมทั้งสิ้น {fee_total:,.0f} บาท\n"
+            f"ค่าธรรมเนียมการศึกษา: {fee_desc}  |  รวมทั้งสิ้น {fee_total:,.0f} บาท\n"
             f"ลงทะเบียนตามกำหนด ภายในวันที่ {ontime_dates} โดยชำระเงินผ่านธนาคารกรุงไทยฯ ได้ทุกสาขาทั่วประเทศ ค่าธรรมเนียมชำระเงินผ่านธนาคาร 10.- บาท\n"
             f"ลงทะเบียนหลังกำหนด (ล่าช้า) ภายในวันที่ {late_dates}"
         )
@@ -477,16 +488,16 @@ class DocxReceiptExporter(BaseFinanceExporter):
     # ==========================================================================
     def _render_official_ex_bill_modern(self, doc, data: Dict[str, Any], meta: Dict[str, Any]):
         college = (self.college_name or meta.get("college_name", "วิทยาลัยอาชีวศึกษาสุพรรณบุรี")).strip()
-        rcp_no = str(data.get("receipt_no", data.get("tx_code", "-"))).strip()
+        rcp_no = str(data.get("receipt_no", data.get("tx_code", "-")) or "-").strip()
         raw_date = data.get("receipt_date", data.get("tx_date", ""))
         rcp_date_th = format_receipt_date_thai(raw_date)
-        term_code = str(data.get("term_code", meta.get("current_semester", "2/2569"))).strip()
-        stu_name = str(data.get("full_name", data.get("snapshot_student_name", "-"))).strip()
-        stu_code = str(data.get("student_code", "-")).strip()
-        cls_grp = str(data.get("class_group", data.get("snapshot_class_group", data.get("education_level", "ปวช.1")))).strip()
+        term_code = str(data.get("term_code", meta.get("current_semester", "2/2569")) or "2/2569").strip()
+        stu_name = str(data.get("full_name", data.get("snapshot_student_name", "-")) or "-").strip()
+        stu_code = str(data.get("student_code", "-") or "-").strip()
+        cls_grp = str(data.get("class_group", data.get("snapshot_class_group", data.get("education_level", "ปวช.1"))) or "ปวช.1").strip()
         faculty_name, major_name = _resolve_faculty_and_major(data)
-        position = (data.get("cashier_position") or meta.get("cashier_position", "ครู")).strip()
-        raw_status = str(data.get("receipt_status", data.get("status", "ISSUED"))).upper()
+        position = (data.get("cashier_position") or meta.get("cashier_position", "ครู") or "ครู").strip()
+        raw_status = str(data.get("receipt_status", data.get("status", "ISSUED")) or "ISSUED").upper()
 
         # Header Table with Garuda in middle and Framed Document Box on right
         top_tbl = doc.add_table(rows=1, cols=3)
@@ -548,10 +559,11 @@ class DocxReceiptExporter(BaseFinanceExporter):
         doc.add_paragraph().paragraph_format.space_after = Pt(2)
 
         # Items Table with Dark Navy Header & Zebra Rows
-        items: List[Dict[str, Any]] = data.get("items", [])
+        items: List[Dict[str, Any]] = data.get("items", []) or []
         if not items:
-            amt_v = float(data.get("net_total_amount", data.get("amount", 0.0)))
-            items = [{"line_no": 1, "item_name": data.get("title", "ชำระค่าธรรมเนียมการศึกษา"), "quantity": 1, "unit_price": amt_v, "line_total": amt_v}]
+            amt_raw = data.get("net_total_amount") if data.get("net_total_amount") is not None else data.get("amount")
+            amt_v = safe_float(amt_raw)
+            items = [{"line_no": 1, "item_name": safe_str(data.get("title") or "ชำระค่าธรรมเนียมการศึกษา"), "quantity": 1, "unit_price": amt_v, "line_total": amt_v}]
 
         filler_count = max(1, 12 - len(items))
         item_tbl = doc.add_table(rows=len(items) + filler_count + 2, cols=2)
@@ -584,8 +596,8 @@ class DocxReceiptExporter(BaseFinanceExporter):
             set_cell_borders(cl, bottom=border_slate, left=border_slate, right=border_slate)
             set_cell_borders(cr, bottom=border_slate, left=border_slate, right=border_slate)
 
-            iname = str(it.get("item_name", "")).strip()
-            ltotal = float(it.get("line_total", 0.0))
+            iname = safe_str(it.get("item_name") if isinstance(it, dict) else "")
+            ltotal = safe_float(it.get("line_total") if isinstance(it, dict) else 0.0)
             set_thai_font(cl.paragraphs[0].add_run(iname), 15.5, color_rgb=(15, 23, 42))
             cr.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
             set_thai_font(cr.paragraphs[0].add_run(f"{ltotal:,.2f}"), 15.5, bold=True, color_rgb=(15, 23, 42))
@@ -597,7 +609,8 @@ class DocxReceiptExporter(BaseFinanceExporter):
             set_cell_borders(cr, left=border_slate, right=border_slate)
             set_thai_font(cl.paragraphs[0].add_run(" "), 12)
 
-        net_val = float(data.get("net_total_amount", data.get("amount", 0.0)))
+        net_raw = data.get("net_total_amount") if data.get("net_total_amount") is not None else data.get("amount")
+        net_val = safe_float(net_raw)
         baht_txt = data.get("amount_text_th") or thai_baht_text(net_val)
         tot_idx = len(items) + filler_count + 1
         tl, tr = item_tbl.cell(tot_idx, 0), item_tbl.cell(tot_idx, 1)
@@ -640,17 +653,17 @@ class DocxReceiptExporter(BaseFinanceExporter):
     def _render_course_registration_card_modern(self, doc, data: Dict[str, Any], meta: Dict[str, Any]):
         stu_dict = data.get("student") if isinstance(data.get("student"), dict) else {}
         college = (self.college_name or meta.get("college_name", "วิทยาลัยอาชีวศึกษาสุพรรณบุรี")).strip()
-        stu_code = str(data.get("student_code") or stu_dict.get("student_code") or "69219100049").strip()
-        stu_name = str(data.get("full_name") or stu_dict.get("full_name") or "นางสาวปรันดา เจียศิริพันธ์").strip()
-        cls_grp = str(data.get("class_group") or stu_dict.get("class_group") or "ปวช. 1/2").strip()
-        fiscal_yr = str(data.get("fiscal_year") or meta.get("fiscal_year", "2569")).strip()
-        major_name = str(data.get("major") or stu_dict.get("major") or "เทคโนโลยีธุรกิจดิจิทัล").strip()
-        subject_type = str(data.get("subject_type", "อุตสาหกรรมดิจิทัลและเทคโนโลยีสารสนเทศ")).strip()
-        career_group = str(data.get("career_group", "ธุรกิจดิจิทัลและพาณิชย์อิเล็กทรอนิกส์")).strip()
-        bank_acc = str(data.get("bank_account", "747-6-00234-2")).strip()
-        bank_code = str(data.get("bank_code", "80215")).strip()
-        ontime_dates = str(data.get("ontime_dates", "12-16 ตุลาคม 2569")).strip()
-        late_dates = str(data.get("late_dates", "19-21 ตุลาคม 2569")).strip()
+        stu_code = safe_str(data.get("student_code") or stu_dict.get("student_code") or "69219100049")
+        stu_name = safe_str(data.get("full_name") or stu_dict.get("full_name") or "นางสาวปรันดา เจียศิริพันธ์")
+        cls_grp = safe_str(data.get("class_group") or stu_dict.get("class_group") or "ปวช. 1/2")
+        fiscal_yr = safe_str(data.get("fiscal_year") or meta.get("fiscal_year", "2569"))
+        major_name = safe_str(data.get("major") or stu_dict.get("major") or "เทคโนโลยีธุรกิจดิจิทัล")
+        subject_type = safe_str(data.get("subject_type") or "อุตสาหกรรมดิจิทัลและเทคโนโลยีสารสนเทศ")
+        career_group = safe_str(data.get("career_group") or "ธุรกิจดิจิทัลและพาณิชย์อิเล็กทรอนิกส์")
+        bank_acc = safe_str(data.get("bank_account") or "747-6-00234-2")
+        bank_code = safe_str(data.get("bank_code") or "80215")
+        ontime_dates = safe_str(data.get("ontime_dates") or "12-16 ตุลาคม 2569")
+        late_dates = safe_str(data.get("late_dates") or "19-21 ตุลาคม 2569")
 
         border_slate = {"val": "single", "sz": 6, "color": "CBD5E1"}
         border_navy = {"val": "single", "sz": 12, "color": "0F172A"}
@@ -700,7 +713,7 @@ class DocxReceiptExporter(BaseFinanceExporter):
             color_rgb=(15, 23, 42),
         )
 
-        courses: List[Dict[str, Any]] = data.get("courses", [])
+        courses: List[Dict[str, Any]] = data.get("courses", []) or []
         c_tbl = doc.add_table(rows=17, cols=6)
         c_tbl.alignment = WD_TABLE_ALIGNMENT.CENTER
         headers = ["ลำดับที่", "รหัสวิชา", "ชื่อวิชา", "ท.", "ป.", "นก."]
@@ -716,14 +729,14 @@ class DocxReceiptExporter(BaseFinanceExporter):
         for idx in range(1, 16):
             bg_hex = "F8FAFC" if idx % 2 == 0 else "FFFFFF"
             if idx <= len(courses):
-                c_it = courses[idx - 1]
-                t_v = int(float(c_it.get("theory_hours", 0)))
-                p_v = int(float(c_it.get("practice_hours", 0)))
-                cr_v = int(float(c_it.get("credits", 0)))
+                c_it = courses[idx - 1] if isinstance(courses[idx - 1], dict) else {}
+                t_v = safe_int(c_it.get("theory_hours"))
+                p_v = safe_int(c_it.get("practice_hours"))
+                cr_v = safe_int(c_it.get("credits"))
                 tot_t += t_v
                 tot_p += p_v
                 tot_c += cr_v
-                vals = [str(idx), str(c_it.get("course_code", "")), str(c_it.get("course_name", "")), str(t_v), str(p_v), str(cr_v)]
+                vals = [str(idx), safe_str(c_it.get("course_code")), safe_str(c_it.get("course_name")), str(t_v), str(p_v), str(cr_v)]
             else:
                 vals = [str(idx), "", "", "", "", ""]
             for c_i, val in enumerate(vals):
@@ -748,7 +761,10 @@ class DocxReceiptExporter(BaseFinanceExporter):
             {"item_name": "ค่าจ้างครูหรือผู้ที่มีความเชี่ยวชาญในสาขาเฉพาะ", "line_total": 500.0},
             {"item_name": "ค่ารักษาสภาพแวดล้อม", "line_total": 330.0},
         ]
-        fee_total = sum(float(f.get("line_total", f.get("unit_price", 0.0))) for f in fee_items)
+        fee_total = sum(
+            safe_float(f.get("line_total") if f.get("line_total") is not None else f.get("unit_price"))
+            for f in fee_items if isinstance(f, dict)
+        )
 
         fp = doc.add_paragraph()
         set_thai_font(
@@ -800,12 +816,12 @@ class DocxReceiptExporter(BaseFinanceExporter):
 
         sub_para = doc.add_paragraph()
         sub_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        addr = meta.get("college_address", "455 ถ.พระพันวษา ต.ท่าพี่เลี้ยง อ.เมืองสุพรรณบุรี จ.สุพรรณบุรี 72000")
-        tax_id = meta.get("college_tax_id", "0994000159721")
+        addr = safe_str(meta.get("college_address") or "455 ถ.พระพันวษา ต.ท่าพี่เลี้ยง อ.เมืองสุพรรณบุรี จ.สุพรรณบุรี 72000")
+        tax_id = safe_str(meta.get("college_tax_id") or "0994000159721")
         sub_run = sub_para.add_run(f"{addr}\nสำนักงานคณะกรรมการการอาชีวศึกษา • รหัสหน่วยงาน/เลขประจำตัวผู้เสียภาษี: {tax_id}")
         set_thai_font(sub_run, 13.5, bold=False, color_rgb=(71, 85, 105))
 
-        doc_title = data.get("doc_title", "รายงานสรุปการรับเงินค่าเทอมประจำวัน")
+        doc_title = safe_str(data.get("doc_title") or "รายงานสรุปการรับเงินค่าเทอมประจำวัน")
         t_table = doc.add_table(rows=1, cols=1)
         t_table.alignment = WD_TABLE_ALIGNMENT.CENTER
         t_cell = t_table.cell(0, 0)
@@ -822,10 +838,11 @@ class DocxReceiptExporter(BaseFinanceExporter):
         summary_table = doc.add_table(rows=3, cols=2)
         summary_table.alignment = WD_TABLE_ALIGNMENT.CENTER
 
-        inc_val = float(data.get("income_total", 0.0))
+        inc_val = safe_float(data.get("income_total"))
+        tx_cnt = safe_int(data.get("tx_count"))
         s_rows = [
             ("วันที่ออกใบเสร็จ (Report Date):", format_receipt_date_thai(data.get("date", "-"))),
-            ("จำนวนใบเสร็จที่รับชำระทั้งหมด:", f"{data.get('tx_count', 0)} ฉบับ"),
+            ("จำนวนใบเสร็จที่รับชำระทั้งหมด:", f"{tx_cnt} ฉบับ"),
             ("ยอดรวมเงินรับสุทธิประจำวัน:", f"฿{inc_val:,.2f} บาท ({thai_baht_text(inc_val)})"),
         ]
         for idx, (k, v) in enumerate(s_rows):
@@ -839,8 +856,8 @@ class DocxReceiptExporter(BaseFinanceExporter):
 
         doc.add_paragraph().paragraph_format.space_after = Pt(6)
 
-        by_method: Dict[str, float] = data.get("income_by_method", {})
-        if by_method:
+        by_method: Dict[str, float] = data.get("income_by_method", {}) or {}
+        if by_method and isinstance(by_method, dict):
             mp = doc.add_paragraph()
             mr = mp.add_run("1. แยกยอดเงินรับตามช่องทางการชำระเงิน:")
             set_thai_font(mr, 15, bold=True)
@@ -848,11 +865,11 @@ class DocxReceiptExporter(BaseFinanceExporter):
                 bp = doc.add_paragraph()
                 bp.paragraph_format.space_before = Pt(1)
                 bp.paragraph_format.space_after = Pt(1)
-                br = bp.add_run(f"   • {method_name}:  ฿{float(amt_val):,.2f} บาท")
+                br = bp.add_run(f"   • {safe_str(method_name)}:  ฿{safe_float(amt_val):,.2f} บาท")
                 set_thai_font(br, 14)
 
-        by_fee: Dict[str, float] = data.get("income_by_fee_item", {})
-        if by_fee:
+        by_fee: Dict[str, float] = data.get("income_by_fee_item", {}) or {}
+        if by_fee and isinstance(by_fee, dict):
             fp = doc.add_paragraph()
             fp.paragraph_format.space_before = Pt(6)
             fr = fp.add_run("2. แยกยอดเงินรับตามหมวดรายการค่าธรรมเนียมในใบเสร็จ:")
@@ -861,13 +878,13 @@ class DocxReceiptExporter(BaseFinanceExporter):
                 bp = doc.add_paragraph()
                 bp.paragraph_format.space_before = Pt(1)
                 bp.paragraph_format.space_after = Pt(1)
-                br = bp.add_run(f"   • {fee_name}:  ฿{float(amt_val):,.2f} บาท")
+                br = bp.add_run(f"   • {safe_str(fee_name)}:  ฿{safe_float(amt_val):,.2f} บาท")
                 set_thai_font(br, 14)
 
     def _render_daily_signature(self, doc, data: Dict[str, Any], meta: Dict[str, Any]):
         raw_recorder = data.get("recorded_by", data.get("cashier_name", "เจ้าหน้าที่การเงิน"))
-        recorder = re.sub(r"\s*\(.*?\)\s*$", "", str(raw_recorder or "").strip()) or "เจ้าหน้าที่การเงิน"
-        position = (data.get("cashier_position") or meta.get("cashier_position", "ครู")).strip()
+        recorder = re.sub(r"\s*\(.*?\)\s*$", "", safe_str(raw_recorder)) or "เจ้าหน้าที่การเงิน"
+        position = safe_str(data.get("cashier_position") or meta.get("cashier_position", "ครู") or "ครู")
         college = (self.college_name or meta.get("college_name", "วิทยาลัยอาชีวศึกษาสุพรรณบุรี")).strip()
 
         doc.add_paragraph().paragraph_format.space_after = Pt(8)

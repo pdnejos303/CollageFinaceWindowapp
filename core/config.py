@@ -1,11 +1,12 @@
 import datetime
 import json
 import os
+import re
 import shutil
 import sqlite3
 import sys
 import zipfile
-from typing import Any, Dict
+from typing import Any, Dict, Optional, Tuple
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "college_name": "วิทยาลัยอาชีวศึกษาสุพรรณบุรี",
@@ -28,7 +29,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "default_export_folder": "",
     "evidence_folder": "",
     "theme_accent": "#000000",
-    "bill_template_style": "MODERN",
+    "bill_template_style": "CLASSIC",
+    "show_course_registration": False,
 }
 
 
@@ -55,13 +57,13 @@ def thai_baht_text(amount: float) -> str:
     thai_num = ["ศูนย์", "หนึ่ง", "สอง", "สาม", "สี่", "ห้า", "หก", "เจ็ด", "แปด", "เก้า"]
     thai_pos = ["", "สิบ", "ร้อย", "พัน", "หมื่น", "แสน", "ล้าน"]
 
-    def _convert_int(n: int) -> str:
+    def _convert_int(n: int, has_higher: bool = False) -> str:
         if n == 0:
             return ""
         if n >= 1_000_000:
             millions = n // 1_000_000
             rem = n % 1_000_000
-            return _convert_int(millions) + "ล้าน" + _convert_int(rem)
+            return _convert_int(millions, has_higher=has_higher) + "ล้าน" + _convert_int(rem, has_higher=True)
         s = str(n)
         length = len(s)
         res = []
@@ -74,7 +76,7 @@ def thai_baht_text(amount: float) -> str:
                 res.append("สิบ")
             elif pos == 1 and digit == 2:
                 res.append("ยี่สิบ")
-            elif pos == 0 and digit == 1 and length > 1:
+            elif pos == 0 and digit == 1 and (length > 1 or has_higher):
                 res.append("เอ็ด")
             else:
                 res.append(thai_num[digit] + thai_pos[pos])
@@ -96,61 +98,142 @@ def format_thai_date_short(dt: datetime.date = None) -> str:
     return f"{d.day}/{d.month}/{byear}"
 
 
+def split_receipt_prefix_and_number(receipt_str: Any) -> Tuple[str, str]:
+    """
+    Splits a receipt number string into prefix (leading letters, symbols) and trailing digits.
+    Handles alphanumeric prefixes, Thai text, hyphens, slashes, or pure numeric sequences.
+
+    Examples:
+        'RC-00125'     -> ('RC-', '00125')
+        'INV2026/001'  -> ('INV2026/', '001')
+        'บิล-05'       -> ('บิล-', '05')
+        '700605433'    -> ('', '700605433')
+        'REC'          -> ('REC', '')
+        ''             -> ('', '')
+    """
+    raw = str(receipt_str or "").strip()
+    if not raw:
+        return "", ""
+    m = re.match(r"^(.*?)(\d+)$", raw)
+    if m:
+        return m.group(1), m.group(2)
+    return raw, ""
+
+
+def format_next_receipt_number(num_str: Any, step: int = 1) -> str:
+    """
+    Increments a numeric string by `step` while preserving leading zeros and digit length.
+
+    Examples:
+        '00125' -> '00126'
+        '0001'  -> '0002'
+        '99'    -> '100'
+        '700605433' -> '700605434'
+    """
+    s = str(num_str or "").strip()
+    if not s or not s.isdigit():
+        return "1"
+    pad_len = len(s)
+    next_val = max(0, int(s) + step)
+    return f"{next_val:0{pad_len}d}"
+
+
+def combine_receipt_no(prefix: Any, number_str: Any) -> str:
+    """
+    Combines prefix and number into a full receipt string without duplicate prefixing.
+
+    Examples:
+        combine_receipt_no('RC-', '0001') -> 'RC-0001'
+        combine_receipt_no('RC-', 'RC-0001') -> 'RC-0001'
+        combine_receipt_no('', '700605433') -> '700605433'
+    """
+    pfx = str(prefix or "").strip()
+    num = str(number_str or "").strip()
+    if not pfx:
+        return num
+    if num.startswith(pfx):
+        return num
+    return f"{pfx}{num}"
+
+
+THAI_MONTHS_SHORT = [
+    "", "ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.",
+    "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."
+]
+
+THAI_MONTHS_LONG = [
+    "", "มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน",
+    "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"
+]
+
+
+def parse_date_robust(val: Any) -> Optional[datetime.date]:
+    """Robustly parses ISO (YYYY-MM-DD), Thai Buddhist (D/M/YYYY or DD/MM/YYYY), and timestamps into datetime.date."""
+    if not val:
+        return None
+    if isinstance(val, datetime.datetime):
+        return val.date()
+    if isinstance(val, datetime.date):
+        return val
+    raw_s = str(val).strip()
+    s = re.split(r"[ T]", raw_s)[0].strip()
+    if not s or s == "-":
+        return None
+    try:
+        sep = "-" if "-" in s else ("/" if "/" in s else None)
+        if sep:
+            p = [int(x) for x in s.split(sep) if x.strip()]
+            if len(p) == 3:
+                if p[0] > 1000:
+                    y = p[0] - 543 if p[0] > 2400 else p[0]
+                    m = p[1]
+                    d = p[2]
+                else:
+                    d = p[0]
+                    m = p[1]
+                    y = p[2]
+                    if y < 100:
+                        y = (y + 2500) - 543 if (y + 2500) > 2400 else y + 2000
+                    elif y > 2400:
+                        y -= 543
+                return datetime.date(y, m, d)
+    except Exception:
+        pass
+    return None
+
+
+def format_thai_date_padded(raw_date: Any = None) -> str:
+    """Formats a date as two-digit padded Thai Buddhist date 'DD/MM/YYYY' (e.g. '09/11/2569')."""
+    d = parse_date_robust(raw_date) or datetime.date.today()
+    byear = d.year + 543 if d.year < 2400 else d.year
+    return f"{d.day:02d}/{d.month:02d}/{byear}"
+
+
+def format_thai_date_display(raw_date: Any = None) -> str:
+    """Formats a date with Thai short month name (e.g. '09/11/2569 (9 พ.ย. 2569)')."""
+    d = parse_date_robust(raw_date) or datetime.date.today()
+    byear = d.year + 543 if d.year < 2400 else d.year
+    m_txt = THAI_MONTHS_SHORT[d.month] if 1 <= d.month <= 12 else ""
+    return f"{d.day:02d}/{d.month:02d}/{byear} ({d.day} {m_txt} {byear})"
+
+
 def format_receipt_date_thai(raw_date: Any = None) -> str:
     """Converts any date string (ISO YYYY-MM-DD or DD/MM/YYYY) into Thai Buddhist DD/MM/YYYY (e.g. '30/10/2569')."""
     if not raw_date:
         return format_thai_date_short()
-    s = str(raw_date).strip()
-    if not s or s == "-":
-        return format_thai_date_short()
-    date_part = s.split(" ")[0].strip()
-    try:
-        if "-" in date_part:
-            parts = date_part.split("-")
-            if len(parts) == 3:
-                y, m, d = int(parts[0]), int(parts[1]), int(parts[2])
-                byear = y + 543 if y < 2400 else y
-                return f"{d}/{m}/{byear}"
-        if "/" in date_part:
-            parts = [p.strip() for p in date_part.split("/") if p.strip()]
-            if len(parts) == 3:
-                d, m, y = int(parts[0]), int(parts[1]), int(parts[2])
-                if y < 100:
-                    y += 2500
-                elif y < 2400:
-                    y += 543
-                return f"{d}/{m}/{y}"
-    except Exception:
-        pass
-    return s
+    d = parse_date_robust(raw_date)
+    if d:
+        byear = d.year + 543 if d.year < 2400 else d.year
+        return f"{d.day}/{d.month}/{byear}"
+    return str(raw_date).strip()
 
 
 def get_garuda_emblem_path(base_dir: str = None) -> str:
-    """Returns the path to the Garuda emblem image for official receipts, extracting it from EXofBill if needed."""
+    """Returns the canonical path to the Garuda emblem image for official receipts."""
     base = base_dir or get_base_dir()
     garuda_path = os.path.join(base, "data", "garuda_emblem.png")
     if os.path.exists(garuda_path):
         return garuda_path
-    ex_bill_img = os.path.join(base, "EX", "EXofBill", "95b999ca-2a23-4412-bbee-a3b29b8aa4e6.jpeg")
-    if os.path.exists(ex_bill_img):
-        try:
-            from PIL import Image, ImageOps
-            os.makedirs(os.path.dirname(garuda_path), exist_ok=True)
-            im = Image.open(ex_bill_img)
-            w, h = im.size
-            crop_box = (int(w * 0.425), int(h * 0.038), int(w * 0.568), int(h * 0.132))
-            garuda = im.crop(crop_box).convert("L")
-            garuda = ImageOps.autocontrast(garuda, cutoff=2)
-            garuda = garuda.point(lambda p: 255 if p > 185 else int(p * 0.72))
-            inv = ImageOps.invert(garuda)
-            bbox = inv.getbbox()
-            if bbox:
-                garuda = garuda.crop(bbox)
-                garuda = ImageOps.expand(garuda, border=8, fill=255)
-            garuda.save(garuda_path)
-            return garuda_path
-        except Exception:
-            pass
     return ""
 
 
@@ -190,6 +273,7 @@ def load_config(base_dir: str = None) -> Dict[str, Any]:
 
 def save_config(cfg: Dict[str, Any], base_dir: str = None) -> bool:
     path = get_config_path(base_dir)
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     data = {k: cfg.get(k, DEFAULT_CONFIG.get(k)) for k in DEFAULT_CONFIG.keys()}
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
@@ -203,15 +287,38 @@ def backup_database(db_path: str, backup_root: str = None) -> str:
     os.makedirs(base, exist_ok=True)
     stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     dest = os.path.join(base, f"spvc_receipt_backup_{stamp}.db")
+    src_conn = None
+    dst_conn = None
     try:
         src_conn = sqlite3.connect(db_path)
         dst_conn = sqlite3.connect(dest)
         with dst_conn:
             src_conn.backup(dst_conn)
-        dst_conn.close()
-        src_conn.close()
     except Exception:
+        if dst_conn:
+            try:
+                dst_conn.close()
+            except Exception:
+                pass
+            dst_conn = None
+        if src_conn:
+            try:
+                src_conn.close()
+            except Exception:
+                pass
+            src_conn = None
         shutil.copy2(db_path, dest)
+    finally:
+        if dst_conn:
+            try:
+                dst_conn.close()
+            except Exception:
+                pass
+        if src_conn:
+            try:
+                src_conn.close()
+            except Exception:
+                pass
     return dest
 
 

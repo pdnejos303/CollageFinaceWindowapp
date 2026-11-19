@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+data/backups/
+data/error_log.txt
+data/*.log
+exports_output/
+scratch/
+build/
+dist/

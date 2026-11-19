@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from typing import Optional
 
 
 @dataclass
@@ -27,7 +26,9 @@ class StudentRecord:
 
     @property
     def balance(self) -> float:
-        return max(0.0, round(self.total_fee - self.paid_amount, 2))
+        fee = float(self.total_fee or 0.0)
+        paid = float(self.paid_amount or 0.0)
+        return max(0.0, round(fee - paid, 2))
 
 
 @dataclass
