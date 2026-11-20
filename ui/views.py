@@ -19,7 +19,7 @@ from core.config import (
     split_receipt_prefix_and_number,
     thai_baht_text,
 )
-from core.database import DatabaseManager
+from core.database import DatabaseManager, ReceiptNumberError
 from core.models import UserSession
 from core.security import SecurityManager
 from exporters.docx_exporter import DocxReceiptExporter
@@ -31,6 +31,7 @@ from ui.components import (
     SearchableDropdown,
     SectionHeader,
     StatCard,
+    ask_receipt_number_resolution,
     choose_export_folder,
     format_export_folder_button_text,
 )
@@ -333,6 +334,7 @@ class SmartReceiptPOSView(ctk.CTkFrame):
 
         mode_box = ctk.CTkFrame(th_in, fg_color="transparent")
         mode_box.grid(row=0, column=1, sticky="e", pady=2)
+        self.mode_switcher = mode_box
 
         self.btn_tab_normal = ctk.CTkButton(
             mode_box,
@@ -514,6 +516,7 @@ class SmartReceiptPOSView(ctk.CTkFrame):
         # ==================================================================
         self.scroll_normal = ctk.CTkScrollableFrame(self.panel_normal, fg_color="transparent")
         self.scroll_normal.pack(side="top", fill="both", expand=True)
+        self.pos_form = self.scroll_normal
 
         # การ์ดข้อมูลหัวใบเสร็จรับเงิน (ส่วนที่ 1 - ด้านบน)
         head_card = ctk.CTkFrame(
@@ -628,32 +631,13 @@ class SmartReceiptPOSView(ctk.CTkFrame):
         f_rcp = ctk.CTkFrame(tbl_head, fg_color="transparent")
         f_rcp.grid(row=0, column=1, sticky="w", padx=(0, 16), pady=5)
 
-        self.entry_rcp_prefix = make_entry(
-            f_rcp,
-            width=70,
-            height=32,
-            font_size=12,
-            bold=True,
-            placeholder_text="เล่ม/หมวด",
-        )
-        self.entry_rcp_prefix.pack(side="left", padx=(0, 4))
-        self.entry_rcp_prefix.insert(0, self.config.get("receipt_prefix", ""))
-        self.entry_rcp_prefix.bind("<FocusOut>", self._on_receipt_prefix_focusout)
-
-        ctk.CTkLabel(
-            f_rcp,
-            text="/",
-            font=(AppTheme.FONT_FAMILY, 14, "bold"),
-            text_color=AppTheme.COLOR_TEXT_MUTED,
-        ).pack(side="left", padx=(0, 4))
-
         self.entry_rcp_no = make_entry(
             f_rcp,
-            width=135,
+            width=210,
             height=32,
             font_size=13,
             bold=True,
-            placeholder_text="เลขที่ใบเสร็จ",
+            placeholder_text="เลขที่ใบเสร็จ (เช่น 700605433)",
         )
         self.entry_rcp_no.pack(side="left", padx=(0, 6))
         self.entry_rcp_no.bind("<FocusOut>", self._on_receipt_no_focusout)
@@ -664,7 +648,7 @@ class SmartReceiptPOSView(ctk.CTkFrame):
             width=72,
             height=32,
             corner_radius=AppTheme.RADIUS_BTN,
-            font=(AppTheme.FONT_FAMILY, 11, "bold"),
+            font=(AppTheme.FONT_FAMILY, 12, "bold"),
             fg_color=AppTheme.COLOR_SECONDARY_BG,
             hover_color=AppTheme.COLOR_SECONDARY_HOVER,
             border_width=1,
@@ -848,7 +832,7 @@ class SmartReceiptPOSView(ctk.CTkFrame):
             fg_color=AppTheme.COLOR_SECONDARY_BG,
             hover_color=AppTheme.COLOR_SECONDARY_HOVER,
             text_color=AppTheme.COLOR_SECONDARY_TEXT,
-            font=(AppTheme.FONT_FAMILY, 11, "bold"),
+            font=(AppTheme.FONT_FAMILY, 12, "bold"),
             command=lambda: self.load_fee_preset("VC1"),
         ).pack(side="left", padx=(0, 6))
 
@@ -860,7 +844,7 @@ class SmartReceiptPOSView(ctk.CTkFrame):
             fg_color=AppTheme.COLOR_SECONDARY_BG,
             hover_color=AppTheme.COLOR_SECONDARY_HOVER,
             text_color=AppTheme.COLOR_SECONDARY_TEXT,
-            font=(AppTheme.FONT_FAMILY, 11, "bold"),
+            font=(AppTheme.FONT_FAMILY, 12, "bold"),
             command=lambda: self.load_fee_preset("HVC1"),
         ).pack(side="left")
 
@@ -1294,7 +1278,7 @@ class SmartReceiptPOSView(ctk.CTkFrame):
         self.lbl_batch_bottom_count = ctk.CTkLabel(
             tot_b_box,
             text="จำนวนใบเสร็จที่จะออก: 0 ฉบับ",
-            font=(AppTheme.FONT_FAMILY, 11),
+            font=(AppTheme.FONT_FAMILY, 12),
             text_color=AppTheme.COLOR_TEXT_SECONDARY,
             anchor="w",
         )
@@ -1589,7 +1573,7 @@ class SmartReceiptPOSView(ctk.CTkFrame):
             f_maj = ctk.CTkFrame(row, fg_color="transparent", width=180)
             f_maj.pack(side="left")
             f_maj.pack_propagate(False)
-            ctk.CTkLabel(f_maj, text=f"{cls_grp} • {dept}", font=(AppTheme.FONT_FAMILY, 11), text_color=AppTheme.COLOR_TEXT_MUTED, anchor="w").pack(side="left", padx=4)
+            ctk.CTkLabel(f_maj, text=f"{cls_grp} • {dept}", font=(AppTheme.FONT_FAMILY, 12), text_color=AppTheme.COLOR_TEXT_MUTED, anchor="w").pack(side="left", padx=4)
 
             # Status Badge
             f_stat = ctk.CTkFrame(row, fg_color="transparent")
@@ -1617,7 +1601,7 @@ class SmartReceiptPOSView(ctk.CTkFrame):
                 border_width=1,
                 border_color=AppTheme.COLOR_SECONDARY_BORDER,
                 text_color=AppTheme.COLOR_SECONDARY_TEXT,
-                font=(AppTheme.FONT_FAMILY, 11, "bold"),
+                font=(AppTheme.FONT_FAMILY, 12, "bold"),
                 command=lambda st=s: self.open_student_custom_modal(st),
             ).pack(anchor="center")
 
@@ -2149,23 +2133,32 @@ class SmartReceiptPOSView(ctk.CTkFrame):
         save_config(self.config)
         self._refresh_export_folder_buttons()
 
-        try:
-            issued_list = self.db.issue_batch_class_receipts(
-                students_list=selected_students,
-                line_items=self.batch_base_items,
-                payment_method=self.batch_pay_method_var.get(),
-                actor=self.session.username,
-                cashier_name=self.session.full_name,
-                role=self.session.role,
-                term_code=self.batch_term_var.get(),
-                book_no=self.config.get("receipt_book_no", "7006"),
-                cashier_position=self.config.get("cashier_position", "ครู"),
-                receipt_prefix=self.config.get("receipt_prefix", ""),
-                start_no=self.config.get("receipt_no_start", "700605433"),
-                end_no=self.config.get("receipt_no_end", "700999999"),
-                receipt_date_override=format_thai_date_short(),
-            )
+        while True:
+            try:
+                issued_list = self.db.issue_batch_class_receipts(
+                    students_list=selected_students,
+                    line_items=self.batch_base_items,
+                    payment_method=self.batch_pay_method_var.get(),
+                    actor=self.session.username,
+                    cashier_name=self.session.full_name,
+                    role=self.session.role,
+                    term_code=self.batch_term_var.get(),
+                    book_no=self.config.get("receipt_book_no", "7006"),
+                    cashier_position=self.config.get("cashier_position", "ครู"),
+                    receipt_prefix=self.config.get("receipt_prefix", ""),
+                    start_no=self.config.get("receipt_no_start", "700605433"),
+                    end_no=self.config.get("receipt_no_end", "700999999"),
+                    receipt_date_override=format_thai_date_short(),
+                )
+                break
+            except ReceiptNumberError as rne:
+                if not self._apply_receipt_number_resolution(rne):
+                    return
+            except Exception as e:
+                messagebox.showerror("เกิดข้อผิดพลาด", f"ไม่สามารถออกใบเสร็จยกห้องได้:\n{e}", parent=self.winfo_toplevel())
+                return
 
+        try:
             export_document_auto(
                 save_path,
                 issued_list,
@@ -2589,63 +2582,67 @@ class SmartReceiptPOSView(ctk.CTkFrame):
         save_config(self.config)
 
     def get_current_receipt_no(self) -> str:
-        """Combines current prefix and number entries into a complete receipt number string."""
-        pfx = self.entry_rcp_prefix.get().strip() if hasattr(self, "entry_rcp_prefix") else self.config.get("receipt_prefix", "")
-        raw_no = self.entry_rcp_no.get().strip() if hasattr(self, "entry_rcp_no") else ""
-        return combine_receipt_no(pfx, raw_no)
-
-    def _on_receipt_prefix_focusout(self, _event=None):
-        """When cashier changes prefix, auto-update config and fetch the next available number for this prefix."""
-        if not hasattr(self, "entry_rcp_prefix"):
-            return
-        new_pfx = self.entry_rcp_prefix.get().strip()
-        if new_pfx != self.config.get("receipt_prefix", ""):
-            self.config["receipt_prefix"] = new_pfx
-            save_config(self.config)
-            start_no = self.config.get("receipt_no_start", "00001" if new_pfx else "700605433")
-            end_no = self.config.get("receipt_no_end", "700999999")
-            nxt = self.db.get_next_receipt_no(new_pfx, start_no=start_no, end_no=end_no)
-            _, num_part = split_receipt_prefix_and_number(nxt)
-            if hasattr(self, "entry_rcp_no"):
-                self.entry_rcp_no.delete(0, "end")
-                self.entry_rcp_no.insert(0, num_part or nxt)
+        """Returns the current receipt number string from the single receipt entry."""
+        if hasattr(self, "entry_rcp_no"):
+            return self.entry_rcp_no.get().strip()
+        pfx = self.config.get("receipt_prefix", "")
+        num = self.config.get("receipt_no_start", "700605433")
+        return combine_receipt_no(pfx, num)
 
     def _on_receipt_no_focusout(self, _event=None):
-        """When cashier edits receipt number, parse prefix if pasted together and remember starting number in config."""
+        """When cashier edits receipt number, parse prefix/number and remember in config."""
         if not hasattr(self, "entry_rcp_no"):
             return
         raw_val = self.entry_rcp_no.get().strip()
         if not raw_val:
             return
         pfx, num = split_receipt_prefix_and_number(raw_val)
-        cur_pfx = self.entry_rcp_prefix.get().strip() if hasattr(self, "entry_rcp_prefix") else ""
-        if pfx and not cur_pfx:
-            if hasattr(self, "entry_rcp_prefix"):
-                self.entry_rcp_prefix.delete(0, "end")
-                self.entry_rcp_prefix.insert(0, pfx)
-            self.entry_rcp_no.delete(0, "end")
-            self.entry_rcp_no.insert(0, num)
-            self.config["receipt_prefix"] = pfx
+        self.config["receipt_prefix"] = pfx
+        if num:
             self.config["receipt_no_start"] = num
-            save_config(self.config)
-        elif num:
-            self.config["receipt_no_start"] = num
-            save_config(self.config)
+        save_config(self.config)
 
     def refresh_next_receipt_no(self):
         prefix = self.config.get("receipt_prefix", "")
         start_no = self.config.get("receipt_no_start", "700605433")
         end_no = self.config.get("receipt_no_end", "700999999")
         nxt = self.db.get_next_receipt_no(prefix, start_no=start_no, end_no=end_no)
-        pfx, num_part = split_receipt_prefix_and_number(nxt)
-
-        if hasattr(self, "entry_rcp_prefix"):
-            self.entry_rcp_prefix.delete(0, "end")
-            self.entry_rcp_prefix.insert(0, pfx or prefix)
 
         if hasattr(self, "entry_rcp_no"):
             self.entry_rcp_no.delete(0, "end")
-            self.entry_rcp_no.insert(0, num_part or nxt)
+            self.entry_rcp_no.insert(0, nxt)
+
+    def _apply_receipt_number_resolution(self, err: ReceiptNumberError, parent=None) -> bool:
+        """Shows one-click resolution dialog for ReceiptNumberError and applies the fix. Returns True to retry."""
+        action, value = ask_receipt_number_resolution(parent or self.winfo_toplevel(), err)
+        if action == "cancel" or not value:
+            return False
+        if action == "extend_range":
+            self.config["receipt_no_end"] = value
+            save_config(self.config)
+            if hasattr(self, "adv_no_end"):
+                try:
+                    self.adv_no_end.delete(0, "end")
+                    self.adv_no_end.insert(0, value)
+                except Exception:
+                    pass
+            return True
+        if action in ("use_next", "reset_low"):
+            pfx, num = split_receipt_prefix_and_number(value)
+            self.config["receipt_prefix"] = pfx
+            self.config["receipt_no_start"] = num or value
+            save_config(self.config)
+            if hasattr(self, "entry_rcp_no"):
+                self.entry_rcp_no.delete(0, "end")
+                self.entry_rcp_no.insert(0, value)
+            if hasattr(self, "adv_no_start"):
+                try:
+                    self.adv_no_start.delete(0, "end")
+                    self.adv_no_start.insert(0, num or value)
+                except Exception:
+                    pass
+            return True
+        return False
 
     def open_receipt_no_config_modal(self):
         """Opens modal dialog to customize receipt prefix, starting number, and auto-increment."""
@@ -2737,7 +2734,9 @@ class SmartReceiptPOSView(ctk.CTkFrame):
             width=155,
         ).grid(row=0, column=0, sticky="e", padx=(0, 12), pady=4)
 
-        cur_pfx = self.entry_rcp_prefix.get().strip() if hasattr(self, "entry_rcp_prefix") else self.config.get("receipt_prefix", "")
+        cur_full = self.get_current_receipt_no()
+        parsed_pfx, parsed_num = split_receipt_prefix_and_number(cur_full)
+        cur_pfx = parsed_pfx or self.config.get("receipt_prefix", "")
         ent_m_pfx = make_entry(f_grid, width=120, height=34, font_size=13, bold=True)
         ent_m_pfx.grid(row=0, column=1, sticky="w", pady=4)
         ent_m_pfx.insert(0, cur_pfx)
@@ -2752,7 +2751,7 @@ class SmartReceiptPOSView(ctk.CTkFrame):
             width=155,
         ).grid(row=1, column=0, sticky="e", padx=(0, 12), pady=4)
 
-        cur_num = self.entry_rcp_no.get().strip() if hasattr(self, "entry_rcp_no") else self.config.get("receipt_no_start", "700605433")
+        cur_num = parsed_num or self.config.get("receipt_no_start", "700605433")
         ent_m_num = make_entry(f_grid, width=180, height=34, font_size=13, bold=True)
         ent_m_num.grid(row=1, column=1, sticky="w", pady=4)
         ent_m_num.insert(0, cur_num)
@@ -2793,7 +2792,7 @@ class SmartReceiptPOSView(ctk.CTkFrame):
         lbl_prev2 = ctk.CTkLabel(
             prev_box,
             text="",
-            font=(AppTheme.FONT_FAMILY, 11),
+            font=(AppTheme.FONT_FAMILY, 12),
             text_color="#64748B",
         )
         lbl_prev2.pack(anchor="w", padx=14, pady=(0, 8))
@@ -2835,12 +2834,9 @@ class SmartReceiptPOSView(ctk.CTkFrame):
                 self.config["receipt_no_end"] = new_end
             save_config(self.config)
 
-            if hasattr(self, "entry_rcp_prefix"):
-                self.entry_rcp_prefix.delete(0, "end")
-                self.entry_rcp_prefix.insert(0, new_pfx)
             if hasattr(self, "entry_rcp_no"):
                 self.entry_rcp_no.delete(0, "end")
-                self.entry_rcp_no.insert(0, new_num)
+                self.entry_rcp_no.insert(0, combine_receipt_no(new_pfx, new_num))
 
             if hasattr(self, "adv_no_start"):
                 try:
@@ -3210,29 +3206,39 @@ class SmartReceiptPOSView(ctk.CTkFrame):
             messagebox.showwarning("ยังไม่มีรายการ", "กรุณากดปุ่ม '➕ เพิ่มรายการลงใบเสร็จ' อย่างน้อย 1 รายการ", parent=self.winfo_toplevel())
             return
 
-        rcp_prefix = self.entry_rcp_prefix.get().strip() if hasattr(self, "entry_rcp_prefix") else self.config.get("receipt_prefix", "")
-        rcp_no = self.get_current_receipt_no()
+        while True:
+            rcp_no = self.get_current_receipt_no()
+            rcp_prefix, _ = split_receipt_prefix_and_number(rcp_no)
+            try:
+                saved = self.db.issue_flexible_receipt(
+                    student_code=stu_code or "EXTERNAL",
+                    line_items=self.cart_items,
+                    payment_method=self.pay_method_var.get(),
+                    actor=self.session.username,
+                    cashier_name=self.session.full_name,
+                    role=self.session.role,
+                    book_no=self.config.get("receipt_book_no", "7006"),
+                    term_code=self.term_var.get(),
+                    receipt_prefix=rcp_prefix,
+                    receipt_no_override=rcp_no,
+                    receipt_date_override=self.entry_date.get().strip(),
+                    cashier_position=self.config.get("cashier_position", "ครู"),
+                    custom_payer_name=stu_name,
+                    custom_faculty=self.fac_var.get(),
+                    custom_major=self.dept_var.get(),
+                    custom_class_group=self.cls_var.get(),
+                    start_no=self.config.get("receipt_no_start", "700605433"),
+                    end_no=self.config.get("receipt_no_end", "700999999"),
+                )
+                break
+            except ReceiptNumberError as rne:
+                if not self._apply_receipt_number_resolution(rne):
+                    return
+            except Exception as e:
+                messagebox.showerror("เกิดข้อผิดพลาดในการบันทึก", f"ไม่สามารถบันทึกข้อมูลได้:\n{e}", parent=self.winfo_toplevel())
+                return
+
         try:
-            saved = self.db.issue_flexible_receipt(
-                student_code=stu_code or "EXTERNAL",
-                line_items=self.cart_items,
-                payment_method=self.pay_method_var.get(),
-                actor=self.session.username,
-                cashier_name=self.session.full_name,
-                role=self.session.role,
-                book_no=self.config.get("receipt_book_no", "7006"),
-                term_code=self.term_var.get(),
-                receipt_prefix=rcp_prefix,
-                receipt_no_override=rcp_no,
-                receipt_date_override=self.entry_date.get().strip(),
-                cashier_position=self.config.get("cashier_position", "ครู"),
-                custom_payer_name=stu_name,
-                custom_faculty=self.fac_var.get(),
-                custom_major=self.dept_var.get(),
-                custom_class_group=self.cls_var.get(),
-                start_no=self.config.get("receipt_no_start", "700605433"),
-                end_no=self.config.get("receipt_no_end", "700999999"),
-            )
             # Auto-advance sequence and remember user-chosen prefix & number
             issued_no = saved.get("receipt_no", rcp_no)
             used_pfx, used_num = split_receipt_prefix_and_number(issued_no)
@@ -3332,7 +3338,6 @@ class SmartReceiptPOSView(ctk.CTkFrame):
             messagebox.showwarning("ยังไม่มีรายการในใบเสร็จ", "กรุณากดปุ่ม '➕ เพิ่มรายการลงใบเสร็จ' อย่างน้อย 1 รายการ", parent=self.winfo_toplevel())
             return
 
-        rcp_prefix = self.entry_rcp_prefix.get().strip() if hasattr(self, "entry_rcp_prefix") else self.config.get("receipt_prefix", "")
         rcp_no = self.get_current_receipt_no()
         out_dir = self.config.get("default_export_folder", os.getcwd())
         os.makedirs(out_dir, exist_ok=True)
@@ -3362,28 +3367,39 @@ class SmartReceiptPOSView(ctk.CTkFrame):
         save_config(self.config)
         self._refresh_export_folder_buttons()
 
-        try:
-            saved = self.db.issue_flexible_receipt(
-                student_code=stu_code or "EXTERNAL",
-                line_items=self.cart_items,
-                payment_method=self.pay_method_var.get(),
-                actor=self.session.username,
-                cashier_name=self.session.full_name,
-                role=self.session.role,
-                book_no=self.config.get("receipt_book_no", "7006"),
-                term_code=self.term_var.get(),
-                receipt_prefix=rcp_prefix,
-                receipt_no_override=rcp_no,
-                receipt_date_override=self.entry_date.get().strip(),
-                cashier_position=self.config.get("cashier_position", "ครู"),
-                custom_payer_name=stu_name,
-                custom_faculty=self.fac_var.get(),
-                custom_major=self.dept_var.get(),
-                custom_class_group=self.cls_var.get(),
-                start_no=self.config.get("receipt_no_start", "700605433"),
-                end_no=self.config.get("receipt_no_end", "700999999"),
-            )
+        while True:
+            rcp_no = self.get_current_receipt_no()
+            rcp_prefix, _ = split_receipt_prefix_and_number(rcp_no)
+            try:
+                saved = self.db.issue_flexible_receipt(
+                    student_code=stu_code or "EXTERNAL",
+                    line_items=self.cart_items,
+                    payment_method=self.pay_method_var.get(),
+                    actor=self.session.username,
+                    cashier_name=self.session.full_name,
+                    role=self.session.role,
+                    book_no=self.config.get("receipt_book_no", "7006"),
+                    term_code=self.term_var.get(),
+                    receipt_prefix=rcp_prefix,
+                    receipt_no_override=rcp_no,
+                    receipt_date_override=self.entry_date.get().strip(),
+                    cashier_position=self.config.get("cashier_position", "ครู"),
+                    custom_payer_name=stu_name,
+                    custom_faculty=self.fac_var.get(),
+                    custom_major=self.dept_var.get(),
+                    custom_class_group=self.cls_var.get(),
+                    start_no=self.config.get("receipt_no_start", "700605433"),
+                    end_no=self.config.get("receipt_no_end", "700999999"),
+                )
+                break
+            except ReceiptNumberError as rne:
+                if not self._apply_receipt_number_resolution(rne):
+                    return
+            except Exception as e:
+                messagebox.showerror("เกิดข้อผิดพลาดในการออกใบเสร็จ", f"ไม่สามารถออกใบเสร็จได้:\n{e}", parent=self.winfo_toplevel())
+                return
 
+        try:
             # Auto-advance sequence and remember user-chosen prefix & number
             issued_no = saved.get("receipt_no", rcp_no)
             used_pfx, used_num = split_receipt_prefix_and_number(issued_no)
@@ -3684,23 +3700,32 @@ class SmartReceiptPOSView(ctk.CTkFrame):
         save_config(self.config)
         self._refresh_export_folder_buttons()
 
-        try:
-            issued_list = self.db.issue_batch_class_receipts(
-                students_list=students_list,
-                line_items=self.cart_items,
-                payment_method=self.pay_method_var.get(),
-                actor=self.session.username,
-                cashier_name=self.session.full_name,
-                role=self.session.role,
-                term_code=self.term_var.get(),
-                book_no=self.config.get("receipt_book_no", "7006"),
-                cashier_position=self.config.get("cashier_position", "ครู"),
-                receipt_prefix=self.config.get("receipt_prefix", ""),
-                start_no=self.config.get("receipt_no_start", "700605433"),
-                end_no=self.config.get("receipt_no_end", "700999999"),
-                receipt_date_override=self.entry_date.get().strip(),
-            )
+        while True:
+            try:
+                issued_list = self.db.issue_batch_class_receipts(
+                    students_list=students_list,
+                    line_items=self.cart_items,
+                    payment_method=self.pay_method_var.get(),
+                    actor=self.session.username,
+                    cashier_name=self.session.full_name,
+                    role=self.session.role,
+                    term_code=self.term_var.get(),
+                    book_no=self.config.get("receipt_book_no", "7006"),
+                    cashier_position=self.config.get("cashier_position", "ครู"),
+                    receipt_prefix=self.config.get("receipt_prefix", ""),
+                    start_no=self.config.get("receipt_no_start", "700605433"),
+                    end_no=self.config.get("receipt_no_end", "700999999"),
+                    receipt_date_override=self.entry_date.get().strip(),
+                )
+                break
+            except ReceiptNumberError as rne:
+                if not self._apply_receipt_number_resolution(rne, parent=parent_widget):
+                    return
+            except Exception as e:
+                messagebox.showerror("เกิดข้อผิดพลาด", f"ไม่สามารถออกใบเสร็จยกห้องได้:\n{e}", parent=parent_widget)
+                return
 
+        try:
             export_document_auto(
                 save_path,
                 issued_list,
@@ -4055,6 +4080,7 @@ class StudentAndFeeCatalogView(ctk.CTkFrame):
             show_pagination=True,
         )
         self.table.pack(side="top", fill="both", expand=True)
+        self.students_table = self.table
 
         self.refresh_table()
 
@@ -4647,6 +4673,7 @@ class ReceiptRegisterView(ctk.CTkFrame):
             show_pagination=True,
         )
         self.table.pack(side="top", fill="both", expand=True)
+        self.receipts_table = self.table
 
         self.refresh_receipts()
 
@@ -5438,6 +5465,7 @@ class SettingsAndBackupView(ctk.CTkFrame):
             border_color=AppTheme.COLOR_BORDER,
         )
         tab_nav_card.pack(fill="x", pady=(0, 12))
+        self.settings_tabs = tab_nav_card
 
         tab_nav_grid = ctk.CTkFrame(tab_nav_card, fg_color="transparent")
         tab_nav_grid.pack(fill="x", padx=8, pady=8)
@@ -5801,7 +5829,7 @@ class SettingsAndBackupView(ctk.CTkFrame):
         ctk.CTkLabel(
             reg_card_inner,
             text="ติ๊กเลือกเพื่อแสดง หรือเอาติ๊กออกเพื่อซ่อนเมนูทะเบียนวิชาและการพิมพ์บัตร อศท.28 จากแถบข้างทันที",
-            font=(AppTheme.FONT_FAMILY, 11),
+            font=(AppTheme.FONT_FAMILY, 12),
             text_color=AppTheme.COLOR_TEXT_MUTED,
         ).pack(anchor="w", padx=(28, 0), pady=(3, 0))
 
@@ -6859,6 +6887,7 @@ class CourseRegistrationView(ctk.CTkFrame):
             border_color=AppTheme.COLOR_BORDER,
         )
         stu_card.pack(side="top", fill="x", pady=(0, 8))
+        self.registration_form = stu_card
 
         # แถบค้นหาและเลือกนักเรียน
         r_search = ctk.CTkFrame(stu_card, fg_color="transparent")

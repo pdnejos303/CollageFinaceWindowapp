@@ -372,6 +372,27 @@ class TutorialWelcomeDialog(ctk.CTkToplevel):
         except Exception:
             pass
 
+    def _revert_withdraw_after_windows_set_titlebar_color(self) -> None:
+        try:
+            if self.winfo_exists():
+                super()._revert_withdraw_after_windows_set_titlebar_color()
+        except Exception:
+            pass
+
+    def focus_set(self) -> None:
+        try:
+            if hasattr(self, "winfo_exists") and self.winfo_exists():
+                super().focus_set()
+        except Exception:
+            pass
+
+    def destroy(self) -> None:
+        try:
+            if hasattr(self, "winfo_exists") and self.winfo_exists():
+                super().destroy()
+        except Exception:
+            pass
+
     def _safe_destroy(self) -> None:
         try:
             self.grab_release()
@@ -379,6 +400,7 @@ class TutorialWelcomeDialog(ctk.CTkToplevel):
             pass
         try:
             if self.winfo_exists():
+                self.withdraw()
                 self.destroy()
         except Exception:
             pass
@@ -448,7 +470,7 @@ class TutorialOverlay(ctk.CTkFrame):
             border_color=AppTheme.COLOR_ACCENT,
             corner_radius=AppTheme.RADIUS_CARD,
         )
-        self._root = root
+        self._host_root = root
         self._on_prev = on_prev
         self._on_next = on_next
         self._on_skip = on_skip
@@ -465,7 +487,7 @@ class TutorialOverlay(ctk.CTkFrame):
     def _build_highlight_bars(self) -> None:
         for _ in range(4):
             bar = ctk.CTkFrame(
-                self._root,
+                self._host_root,
                 fg_color=AppTheme.COLOR_PRIMARY_BLUE,
                 corner_radius=0,
                 border_width=0,
@@ -724,24 +746,26 @@ class TutorialOverlay(ctk.CTkFrame):
     def _place_card(self, target_widget: Optional[Any] = None) -> None:
         """Positions the floating tutorial card cleanly inside root."""
         try:
-            self._root.update_idletasks()
-            rw = self._root.winfo_width()
-            rh = self._root.winfo_height()
+            self._host_root.update_idletasks()
+            self.update_idletasks()
+            rw = self._host_root.winfo_width()
+            rh = self._host_root.winfo_height()
             card_w = 460
+            card_h = max(self.winfo_reqheight(), 260)
             if rw > 500 and rh > 380:
                 margin = 20
                 x = rw - card_w - margin
-                y = rh - self.winfo_reqheight() - margin
+                y = rh - card_h - margin
                 if target_widget is not None and target_widget.winfo_exists():
-                    tx = target_widget.winfo_rootx() - self._root.winfo_rootx()
-                    ty = target_widget.winfo_rooty() - self._root.winfo_rooty()
+                    tx = target_widget.winfo_rootx() - self._host_root.winfo_rootx()
+                    ty = target_widget.winfo_rooty() - self._host_root.winfo_rooty()
                     tw = target_widget.winfo_width()
                     th = target_widget.winfo_height()
                     # If target sits in bottom-right, move card to bottom-left or top-right
                     if tx + tw > x and ty + th > y:
                         if tx > card_w + margin * 2:
                             x = margin
-                        elif ty > self.winfo_reqheight() + margin * 2:
+                        elif ty > card_h + margin * 2:
                             y = margin + 56
                 self.place(x=max(margin, x), y=max(margin, y), width=card_w)
             else:
@@ -761,9 +785,9 @@ class TutorialOverlay(ctk.CTkFrame):
         try:
             if not target_widget.winfo_exists():
                 return
-            self._root.update_idletasks()
-            rx = self._root.winfo_rootx()
-            ry = self._root.winfo_rooty()
+            self._host_root.update_idletasks()
+            rx = self._host_root.winfo_rootx()
+            ry = self._host_root.winfo_rooty()
             tx = target_widget.winfo_rootx() - rx
             ty = target_widget.winfo_rooty() - ry
             tw = target_widget.winfo_width()

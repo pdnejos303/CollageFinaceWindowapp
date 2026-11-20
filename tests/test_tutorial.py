@@ -170,6 +170,28 @@ class TestTutorialWelcomeDialog(BaseTutorialTestCase):
         self.assertEqual(skipped, [False])
         self.assertFalse(cfg["tutorial_completed"])
 
+    def test_welcome_dialog_destroy_does_not_raise_on_pending_after_callbacks(self):
+        errors = []
+        orig_handler = self.root.report_callback_exception
+        self.root.report_callback_exception = lambda exc, val, tb: errors.append((exc, val))
+        try:
+            dlg = TutorialWelcomeDialog(
+                parent=self.root,
+                on_start=lambda: None,
+                config={"tutorial_completed": False},
+            )
+            dlg._handle_start()
+            # Trigger any pending after callbacks / idle tasks
+            self.root.update()
+            # Also verify guarded methods on destroyed dialog do not raise
+            dlg._revert_withdraw_after_windows_set_titlebar_color()
+            dlg.focus_set()
+            dlg.destroy()
+        finally:
+            self.root.report_callback_exception = orig_handler
+
+        self.assertEqual(errors, [], f"Unexpected Tk callback errors: {errors}")
+
 
 class TestInteractiveTutorialManager(BaseTutorialTestCase):
     def _sample_steps(self):
@@ -244,6 +266,44 @@ class TestInteractiveTutorialManager(BaseTutorialTestCase):
         self.assertIsNone(mgr.overlay)
         self.assertTrue(cfg["tutorial_completed"])
         self.assertEqual(skipped, [True])
+
+    def test_overlay_root_method_not_shadowed_and_buttons_work(self):
+        cfg = {"tutorial_completed": False}
+        mgr = InteractiveTutorialManager(
+            root=self.root,
+            config=cfg,
+            steps=self._sample_steps(),
+        )
+        self.assertTrue(mgr.start())
+        overlay = mgr.overlay
+        self.assertIsNotNone(overlay)
+
+        # tkinter.Misc._root() must remain callable and return the Tk root
+        self.assertTrue(callable(overlay._root))
+        self.assertIs(overlay._root(), self.root._root())
+
+        # Dispatching Tk events and invoking overlay buttons must not raise TypeError
+        errors = []
+        orig_handler = self.root.report_callback_exception
+        self.root.report_callback_exception = lambda exc, val, tb: errors.append((exc, val))
+        try:
+            overlay.btn_next.event_generate("<Enter>")
+            overlay.btn_next.invoke()
+            self.assertEqual(mgr.current_index, 1)
+
+            overlay.btn_prev.invoke()
+            self.assertEqual(mgr.current_index, 0)
+
+            overlay._step_dots[2].invoke()
+            self.assertEqual(mgr.current_index, 2)
+
+            overlay.btn_skip.invoke()
+            self.assertFalse(mgr.is_active)
+            self.root.update_idletasks()
+        finally:
+            self.root.report_callback_exception = orig_handler
+
+        self.assertEqual(errors, [], f"Unexpected Tk callback errors: {errors}")
 
 
 class TestMainWindowTutorialIntegration(BaseTutorialTestCase):
@@ -346,6 +406,42 @@ class TestMainWindowTutorialIntegration(BaseTutorialTestCase):
             f"Expected after(450, _maybe_show_tutorial_welcome), got {scheduled}",
         )
         self.assertIsNotNone(main.btn_tutorial)
+
+    def test_all_tutorial_steps_resolve_actual_view_target_widgets(self):
+        self.config["show_course_registration"] = True
+        main = self._build_minimal_main_window()
+
+        with patch("ui.main_window.save_config", return_value=True):
+            started = main.start_tutorial()
+            self.assertTrue(started)
+            mgr = main.tutorial_manager
+            self.assertEqual(len(mgr.steps), len(TUTORIAL_STEPS))
+
+            for idx, step in enumerate(mgr.steps):
+                mgr.go_to_step(idx)
+                resolved = main._resolve_tutorial_widget(step)
+                self.assertIsNotNone(
+                    resolved,
+                    f"Step {step.step_id} ({step.page_key}.{step.target_attr}) resolved to None",
+                )
+                self.assertNotIn(
+                    resolved,
+                    main.nav_buttons.values(),
+                    f"Step {step.step_id} fell back to sidebar nav_button instead of {step.target_attr}",
+                )
+                self.assertIsNot(
+                    resolved,
+                    main.content_area,
+                    f"Step {step.step_id} fell back to content_area instead of {step.target_attr}",
+                )
+                expected_widget = getattr(main.current_view, step.target_attr, None)
+                self.assertIs(
+                    resolved,
+                    expected_widget,
+                    f"Step {step.step_id} expected {step.target_attr} on {type(main.current_view).__name__}",
+                )
+
+            mgr.stop()
 
 
 if __name__ == "__main__":

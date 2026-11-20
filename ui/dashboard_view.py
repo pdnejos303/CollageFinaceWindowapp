@@ -448,6 +448,7 @@ class DashboardView(ctk.CTkFrame):
             corner_radius=AppTheme.RADIUS_CARD,
         )
         self.tbl_recent.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        self.recent_table = self.tbl_recent
 
         # Initial data load
         self.refresh_dashboard()
@@ -615,19 +616,19 @@ class DashboardView(ctk.CTkFrame):
         # Paid
         col_paid = ctk.CTkFrame(flat_status_row, fg_color="#F0FDF4", corner_radius=AppTheme.RADIUS)
         col_paid.grid(row=0, column=0, sticky="nsew", padx=(0, 3), pady=2)
-        ctk.CTkLabel(col_paid, text="ชำระครบ", font=(AppTheme.FONT_FAMILY, 11, "bold"), text_color=AppTheme.COLOR_SUCCESS).pack(pady=(6, 0))
+        ctk.CTkLabel(col_paid, text="ชำระครบ", font=(AppTheme.FONT_FAMILY, 12, "bold"), text_color=AppTheme.COLOR_SUCCESS).pack(pady=(6, 0))
         ctk.CTkLabel(col_paid, text=f"{data.get('paid_student_count', 0)} คน", font=(AppTheme.FONT_FAMILY, 13, "bold"), text_color=AppTheme.COLOR_SUCCESS).pack(pady=(0, 6))
 
         # Partial
         col_part = ctk.CTkFrame(flat_status_row, fg_color="#FFFBEB", corner_radius=AppTheme.RADIUS)
         col_part.grid(row=0, column=1, sticky="nsew", padx=3, pady=2)
-        ctk.CTkLabel(col_part, text="ค้างบางส่วน", font=(AppTheme.FONT_FAMILY, 11, "bold"), text_color=AppTheme.COLOR_WARNING).pack(pady=(6, 0))
+        ctk.CTkLabel(col_part, text="ค้างบางส่วน", font=(AppTheme.FONT_FAMILY, 12, "bold"), text_color=AppTheme.COLOR_WARNING).pack(pady=(6, 0))
         ctk.CTkLabel(col_part, text=f"{data.get('partial_student_count', 0)} คน", font=(AppTheme.FONT_FAMILY, 13, "bold"), text_color=AppTheme.COLOR_WARNING).pack(pady=(0, 6))
 
         # Unpaid
         col_unp = ctk.CTkFrame(flat_status_row, fg_color="#FEF2F2", corner_radius=AppTheme.RADIUS)
         col_unp.grid(row=0, column=2, sticky="nsew", padx=(3, 0), pady=2)
-        ctk.CTkLabel(col_unp, text="ยังไม่ชำระ", font=(AppTheme.FONT_FAMILY, 11, "bold"), text_color=AppTheme.COLOR_DANGER).pack(pady=(6, 0))
+        ctk.CTkLabel(col_unp, text="ยังไม่ชำระ", font=(AppTheme.FONT_FAMILY, 12, "bold"), text_color=AppTheme.COLOR_DANGER).pack(pady=(6, 0))
         ctk.CTkLabel(col_unp, text=f"{data.get('unpaid_student_count', 0)} คน", font=(AppTheme.FONT_FAMILY, 13, "bold"), text_color=AppTheme.COLOR_DANGER).pack(pady=(0, 6))
 
         # 4. Render Dynamic Breakdown (By Department if Level Filtered, else By Level)
@@ -717,7 +718,7 @@ class DashboardView(ctk.CTkFrame):
                     corner_radius=AppTheme.RADIUS,
                     fg_color=pill_color,
                     text_color="#FFFFFF",
-                    font=(AppTheme.FONT_FAMILY, 11, "bold"),
+                    font=(AppTheme.FONT_FAMILY, 12, "bold"),
                 ).pack(side="left", padx=(0, 8))
 
                 name_lbl = ctk.CTkLabel(

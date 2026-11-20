@@ -307,6 +307,7 @@ class ReceiptGalleryView(ctk.CTkFrame):
         workspace.grid_columnconfigure(0, weight=5, uniform="gallery_split")
         workspace.grid_columnconfigure(1, weight=6, uniform="gallery_split")
         workspace.grid_rowconfigure(0, weight=1)
+        self.gallery_split = workspace
 
         # Left Panel: Scrollable Gallery Grid/List
         left_card = ctk.CTkFrame(
@@ -377,7 +378,7 @@ class ReceiptGalleryView(ctk.CTkFrame):
                 text_color=AppTheme.COLOR_TEXT_SECONDARY,
                 border_width=1,
                 border_color=AppTheme.COLOR_BORDER_STRONG,
-                font=(AppTheme.FONT_FAMILY, 11, "bold"),
+                font=(AppTheme.FONT_FAMILY, 12, "bold"),
                 command=cmd,
             ).pack(side="right", padx=2)
 
@@ -650,7 +651,7 @@ class ReceiptGalleryView(ctk.CTkFrame):
             width=self.THUMB_SIZE[0],
             height=self.THUMB_SIZE[1],
             fg_color="#FFFFFF",
-            font=(AppTheme.FONT_FAMILY, 11),
+            font=(AppTheme.FONT_FAMILY, 12),
             text_color=AppTheme.COLOR_TEXT_MUTED,
         )
         lbl_img.pack(padx=8, pady=(8, 4))
@@ -671,7 +672,7 @@ class ReceiptGalleryView(ctk.CTkFrame):
         lbl_sub = ctk.CTkLabel(
             card,
             text=sub_text,
-            font=(AppTheme.FONT_FAMILY, 11),
+            font=(AppTheme.FONT_FAMILY, 12),
             text_color=AppTheme.COLOR_TEXT_MUTED,
             anchor="w",
             wraplength=170,
@@ -699,7 +700,7 @@ class ReceiptGalleryView(ctk.CTkFrame):
             width=self.LIST_THUMB_SIZE[0],
             height=self.LIST_THUMB_SIZE[1],
             fg_color="#FFFFFF",
-            font=(AppTheme.FONT_FAMILY, 10),
+            font=(AppTheme.FONT_FAMILY, 12),
             text_color=AppTheme.COLOR_TEXT_MUTED,
         )
         lbl_img.pack(side="left", padx=8, pady=6)
@@ -722,7 +723,7 @@ class ReceiptGalleryView(ctk.CTkFrame):
         lbl_sub = ctk.CTkLabel(
             info,
             text=" | ".join(sub_parts),
-            font=(AppTheme.FONT_FAMILY, 11),
+            font=(AppTheme.FONT_FAMILY, 12),
             text_color=AppTheme.COLOR_TEXT_MUTED,
             anchor="w",
         )

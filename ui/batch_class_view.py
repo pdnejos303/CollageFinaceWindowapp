@@ -12,7 +12,7 @@ from core.config import (
     split_receipt_prefix_and_number,
     thai_baht_text,
 )
-from core.database import DatabaseManager
+from core.database import DatabaseManager, ReceiptNumberError
 from core.models import UserSession
 from exporters.docx_exporter import DocxReceiptExporter
 from exporters.pdf_exporter import PdfReceiptExporter
@@ -20,6 +20,7 @@ from ui.components import (
     DataTable,
     SearchableDropdown,
     SectionHeader,
+    ask_receipt_number_resolution,
     choose_export_folder,
     format_export_folder_button_text,
     open_document_file,
@@ -227,6 +228,7 @@ class BatchClassReceiptView(ctk.CTkFrame):
         workspace.grid_columnconfigure(0, weight=11)
         workspace.grid_columnconfigure(1, weight=9)
         workspace.grid_rowconfigure(0, weight=1)
+        self.batch_workspace = workspace
 
         # ==================================================================
         # LEFT PANEL: 1. Classroom Student Roster
@@ -259,7 +261,7 @@ class BatchClassReceiptView(ctk.CTkFrame):
             fg_color=AppTheme.COLOR_NEUTRAL_BTN,
             hover_color=AppTheme.COLOR_NEUTRAL_BTN_HOVER,
             text_color=AppTheme.COLOR_TEXT_SECONDARY,
-            font=(AppTheme.FONT_FAMILY, 11, "bold"),
+            font=(AppTheme.FONT_FAMILY, 12, "bold"),
             command=self.clear_students,
         ).pack(side="right")
 
@@ -412,7 +414,7 @@ class BatchClassReceiptView(ctk.CTkFrame):
             fg_color=AppTheme.COLOR_NEUTRAL_BTN,
             hover_color=AppTheme.COLOR_NEUTRAL_BTN_HOVER,
             text_color=AppTheme.COLOR_DANGER,
-            font=(AppTheme.FONT_FAMILY, 11, "bold"),
+            font=(AppTheme.FONT_FAMILY, 12, "bold"),
             command=self.clear_all_fees,
         ).pack(side="right")
 
@@ -425,7 +427,7 @@ class BatchClassReceiptView(ctk.CTkFrame):
             fg_color=AppTheme.COLOR_NEUTRAL_BTN,
             hover_color=AppTheme.COLOR_NEUTRAL_BTN_HOVER,
             text_color=AppTheme.COLOR_TEXT_SECONDARY,
-            font=(AppTheme.FONT_FAMILY, 11, "bold"),
+            font=(AppTheme.FONT_FAMILY, 12, "bold"),
             command=self.remove_selected_fee,
         ).pack(side="right", padx=(0, 6))
 
@@ -844,20 +846,39 @@ class BatchClassReceiptView(ctk.CTkFrame):
                 except Exception:
                     pass
 
-            issued_list = self.db.issue_batch_class_receipts(
-                students_list=self.classroom_students,
-                line_items=self.classroom_fees,
-                payment_method=self.pay_method_var.get(),
-                actor=self.session.username,
-                cashier_name=self.session.full_name,
-                role=self.session.role,
-                term_code=chosen_term,
-                book_no=self.config.get("receipt_book_no", "7006"),
-                cashier_position=self.config.get("cashier_position", "ครู"),
-                receipt_prefix=self.config.get("receipt_prefix", ""),
-                start_no=self.config.get("receipt_no_start", "700605433"),
-                end_no=self.config.get("receipt_no_end", "700999999"),
-            )
+            issued_list = None
+            for _attempt in range(5):
+                try:
+                    issued_list = self.db.issue_batch_class_receipts(
+                        students_list=self.classroom_students,
+                        line_items=self.classroom_fees,
+                        payment_method=self.pay_method_var.get(),
+                        actor=self.session.username,
+                        cashier_name=self.session.full_name,
+                        role=self.session.role,
+                        term_code=chosen_term,
+                        book_no=self.config.get("receipt_book_no", "7006"),
+                        cashier_position=self.config.get("cashier_position", "ครู"),
+                        receipt_prefix=self.config.get("receipt_prefix", ""),
+                        start_no=self.config.get("receipt_no_start", "700605433"),
+                        end_no=self.config.get("receipt_no_end", "700999999"),
+                    )
+                    break
+                except ReceiptNumberError as err:
+                    action, value = ask_receipt_number_resolution(self, err)
+                    if action in ("use_next", "reset_low") and value:
+                        pfx, num = split_receipt_prefix_and_number(value)
+                        self.config["receipt_prefix"] = pfx
+                        self.config["receipt_no_start"] = num
+                        save_config(self.config)
+                    elif action == "extend_range" and value:
+                        self.config["receipt_no_end"] = value
+                        save_config(self.config)
+                    else:
+                        return
+
+            if issued_list is None:
+                return
 
             # Export multi-page receipt document (PDF or Word)
             college_name = self.config.get("college_name", "วิทยาลัยอาชีวศึกษาสุพรรณบุรี")
