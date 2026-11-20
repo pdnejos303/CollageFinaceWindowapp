@@ -448,11 +448,24 @@ class TutorialWelcomeDialog(ctk.CTkToplevel):
 
 class TutorialOverlay(ctk.CTkFrame):
     """
-    Floating AppTheme-styled guided tour card with target widget highlight border,
-    progress indicator, clickable step dots, section jump menu, and navigation buttons.
+    Floating AppTheme-styled guided tour card with a 4-panel dimmed backdrop,
+    spotlight cutout + highlight ring around the target widget, smart anchoring
+    next to the target, readable typography, click-anywhere-to-continue,
+    clickable step dots, section jump menu, and navigation buttons.
     """
 
-    HIGHLIGHT_THICKNESS = 3
+    HIGHLIGHT_THICKNESS = 4
+    SPOTLIGHT_PADDING = 8
+    DIM_COLOR = "#0B1120"
+    SPOTLIGHT_RING_COLOR = "#38BDF8"
+    CARD_WIDTH = 500
+
+    FONT_CARD_BADGE = (AppTheme.FONT_FAMILY, 13, "bold")
+    FONT_CARD_PROGRESS = (AppTheme.FONT_FAMILY, 13)
+    FONT_CARD_TITLE = (AppTheme.FONT_FAMILY, 19, "bold")
+    FONT_CARD_BODY = (AppTheme.FONT_FAMILY, 15)
+    FONT_CARD_TIPS = (AppTheme.FONT_FAMILY, 14)
+    FONT_CARD_HINT = (AppTheme.FONT_FAMILY, 13, "bold")
 
     def __init__(
         self,
@@ -479,49 +492,102 @@ class TutorialOverlay(ctk.CTkFrame):
         self._is_last_step = False
         self._step_dots: List[ctk.CTkButton] = []
         self._jump_labels: List[str] = []
+        self._dim_panels: List[ctk.CTkFrame] = []
         self._highlight_bars: List[ctk.CTkFrame] = []
+        self._last_target_widget: Optional[Any] = None
+        self._last_root_size: Tuple[int, int] = (0, 0)
+        self._configure_bind_id: Optional[str] = None
 
+        self._build_dim_panels()
         self._build_highlight_bars()
         self._build_card_ui()
+        self._bind_root_configure()
+
+    def _bind_root_configure(self) -> None:
+        try:
+            self._configure_bind_id = self._host_root.bind(
+                "<Configure>", self._on_root_configure, add="+"
+            )
+        except Exception:
+            self._configure_bind_id = None
+
+    def _on_root_configure(self, _event: Any = None) -> None:
+        try:
+            if not self.winfo_exists() or not self.winfo_ismapped():
+                return
+            rw = self._host_root.winfo_width()
+            rh = self._host_root.winfo_height()
+            if (rw, rh) != self._last_root_size and rw > 1 and rh > 1:
+                self._last_root_size = (rw, rh)
+                self._layout_spotlight_and_card(self._last_target_widget)
+        except Exception:
+            pass
+
+    def _build_dim_panels(self) -> None:
+        for _ in range(4):
+            panel = ctk.CTkFrame(
+                self._host_root,
+                fg_color=self.DIM_COLOR,
+                corner_radius=0,
+                border_width=0,
+            )
+            try:
+                panel.configure(cursor="hand2")
+            except Exception:
+                pass
+            panel.bind("<Button-1>", self._handle_backdrop_click)
+            self._dim_panels.append(panel)
 
     def _build_highlight_bars(self) -> None:
         for _ in range(4):
             bar = ctk.CTkFrame(
                 self._host_root,
-                fg_color=AppTheme.COLOR_PRIMARY_BLUE,
+                fg_color=self.SPOTLIGHT_RING_COLOR,
                 corner_radius=0,
                 border_width=0,
             )
             self._highlight_bars.append(bar)
 
+    def _bind_click_to_advance(self, widget: Any) -> None:
+        try:
+            widget.bind("<Button-1>", self._handle_backdrop_click)
+        except Exception:
+            pass
+
     def _build_card_ui(self) -> None:
+        self._bind_click_to_advance(self)
+
         # Top Navy header strip
         header = ctk.CTkFrame(
             self,
             fg_color=AppTheme.COLOR_ACCENT,
             corner_radius=AppTheme.RADIUS,
-            height=40,
+            height=42,
         )
         header.pack(fill="x", side="top")
+        self._bind_click_to_advance(header)
 
         self.lbl_page_badge = ctk.CTkLabel(
             header,
             text="หน้า: -",
-            font=AppTheme.FONT_LABEL,
+            font=self.FONT_CARD_BADGE,
             text_color=AppTheme.COLOR_TEXT_LIGHT,
         )
         self.lbl_page_badge.pack(side="left", padx=AppTheme.SPACE_MD, pady=AppTheme.SPACE_SM)
+        self._bind_click_to_advance(self.lbl_page_badge)
 
         self.lbl_progress = ctk.CTkLabel(
             header,
             text="ขั้นตอนที่ 1 / 1",
-            font=AppTheme.FONT_CAPTION,
+            font=self.FONT_CARD_PROGRESS,
             text_color=AppTheme.COLOR_SECONDARY_BG,
         )
         self.lbl_progress.pack(side="right", padx=AppTheme.SPACE_MD, pady=AppTheme.SPACE_SM)
+        self._bind_click_to_advance(self.lbl_progress)
 
         content = ctk.CTkFrame(self, fg_color=AppTheme.COLOR_SURFACE, corner_radius=0)
         content.pack(fill="both", expand=True, padx=AppTheme.SPACE_MD, pady=AppTheme.SPACE_MD)
+        self._bind_click_to_advance(content)
 
         # Jump menu row
         jump_row = ctk.CTkFrame(content, fg_color="transparent")
@@ -540,7 +606,7 @@ class TutorialOverlay(ctk.CTkFrame):
             jump_row,
             variable=self.jump_var,
             values=["-"],
-            height=28,
+            height=30,
             font=AppTheme.FONT_CAPTION,
             fg_color=AppTheme.COLOR_DROPDOWN_FG,
             button_color=AppTheme.COLOR_DROPDOWN_BTN,
@@ -555,22 +621,24 @@ class TutorialOverlay(ctk.CTkFrame):
         self.lbl_title = ctk.CTkLabel(
             content,
             text="",
-            font=AppTheme.FONT_SECTION,
+            font=self.FONT_CARD_TITLE,
             text_color=AppTheme.COLOR_TEXT,
-            wraplength=420,
+            wraplength=452,
             justify="left",
         )
         self.lbl_title.pack(anchor="w", pady=(0, AppTheme.SPACE_XS))
+        self._bind_click_to_advance(self.lbl_title)
 
         self.lbl_description = ctk.CTkLabel(
             content,
             text="",
-            font=AppTheme.FONT_BODY,
+            font=self.FONT_CARD_BODY,
             text_color=AppTheme.COLOR_TEXT_SECONDARY,
-            wraplength=420,
+            wraplength=452,
             justify="left",
         )
         self.lbl_description.pack(anchor="w", pady=(0, AppTheme.SPACE_SM))
+        self._bind_click_to_advance(self.lbl_description)
 
         self.tips_frame = ctk.CTkFrame(
             content,
@@ -579,29 +647,44 @@ class TutorialOverlay(ctk.CTkFrame):
             border_color=AppTheme.COLOR_SECONDARY_BORDER,
             corner_radius=AppTheme.RADIUS,
         )
+        self._bind_click_to_advance(self.tips_frame)
         self.lbl_tips = ctk.CTkLabel(
             self.tips_frame,
             text="",
-            font=AppTheme.FONT_CAPTION,
+            font=self.FONT_CARD_TIPS,
             text_color=AppTheme.COLOR_SECONDARY_TEXT,
-            wraplength=400,
+            wraplength=432,
             justify="left",
         )
         self.lbl_tips.pack(anchor="w", padx=AppTheme.SPACE_SM, pady=AppTheme.SPACE_SM)
+        self._bind_click_to_advance(self.lbl_tips)
 
         # Clickable step dots row
         self.dots_frame = ctk.CTkFrame(content, fg_color="transparent")
-        self.dots_frame.pack(fill="x", pady=(AppTheme.SPACE_SM, AppTheme.SPACE_SM))
+        self.dots_frame.pack(fill="x", pady=(AppTheme.SPACE_SM, AppTheme.SPACE_XS))
+        self._bind_click_to_advance(self.dots_frame)
+
+        # Click-anywhere hint
+        self.lbl_click_hint = ctk.CTkLabel(
+            content,
+            text="คลิกที่ใดก็ได้เพื่อไปต่อ",
+            font=self.FONT_CARD_HINT,
+            text_color=AppTheme.COLOR_PRIMARY_BLUE,
+        )
+        self.lbl_click_hint.pack(anchor="w", pady=(0, AppTheme.SPACE_SM))
+        self._bind_click_to_advance(self.lbl_click_hint)
 
         # Action controls row
         controls = ctk.CTkFrame(content, fg_color="transparent")
         controls.pack(fill="x", pady=(AppTheme.SPACE_XS, 0))
+        self._bind_click_to_advance(controls)
 
         self.btn_skip = ctk.CTkButton(
             controls,
-            text="ข้ามบทเรียน (Skip)",
-            font=AppTheme.FONT_CAPTION,
+            text="ข้าม",
+            font=AppTheme.FONT_LABEL,
             height=AppTheme.CTRL_H_SM,
+            width=72,
             fg_color=AppTheme.COLOR_NEUTRAL_BTN,
             hover_color=AppTheme.COLOR_NEUTRAL_BTN_HOVER,
             text_color=AppTheme.COLOR_TEXT_MUTED,
@@ -617,10 +700,10 @@ class TutorialOverlay(ctk.CTkFrame):
 
         self.btn_prev = ctk.CTkButton(
             nav_right,
-            text="ย้อนกลับ",
+            text="← ย้อนกลับ",
             font=AppTheme.FONT_LABEL,
             height=AppTheme.CTRL_H_SM,
-            width=84,
+            width=104,
             fg_color=AppTheme.COLOR_NEUTRAL_BTN,
             hover_color=AppTheme.COLOR_NEUTRAL_BTN_HOVER,
             text_color=AppTheme.COLOR_TEXT_SECONDARY,
@@ -633,10 +716,10 @@ class TutorialOverlay(ctk.CTkFrame):
 
         self.btn_next = ctk.CTkButton(
             nav_right,
-            text="ถัดไป",
+            text="ถัดไป →",
             font=AppTheme.FONT_LABEL,
             height=AppTheme.CTRL_H_SM,
-            width=100,
+            width=110,
             fg_color=AppTheme.COLOR_PRIMARY_BLUE,
             hover_color=AppTheme.COLOR_PRIMARY_BLUE_HOVER,
             text_color=AppTheme.COLOR_TEXT_LIGHT,
@@ -692,21 +775,40 @@ class TutorialOverlay(ctk.CTkFrame):
         self.btn_prev.configure(state="disabled" if index <= 0 else "normal")
         if self._is_last_step:
             self.btn_next.configure(
-                text="เสร็จสิ้น",
+                text="เสร็จสิ้น ✔",
                 fg_color=AppTheme.COLOR_SUCCESS,
                 hover_color=AppTheme.COLOR_SUCCESS_HOVER,
             )
+            self.lbl_click_hint.configure(text="คลิกที่ใดก็ได้เพื่อเสร็จสิ้น")
         else:
             self.btn_next.configure(
-                text="ถัดไป",
+                text="ถัดไป →",
                 fg_color=AppTheme.COLOR_PRIMARY_BLUE,
                 hover_color=AppTheme.COLOR_PRIMARY_BLUE_HOVER,
             )
+            self.lbl_click_hint.configure(text="คลิกที่ใดก็ได้เพื่อไปต่อ")
 
-        self._place_card(target_widget)
-        self._highlight_widget(target_widget)
+        self._last_target_widget = target_widget
+        self._layout_spotlight_and_card(target_widget)
 
     def _render_step_dots(self, current_index: int, total: int) -> None:
+        if len(self._step_dots) == total:
+            for i, dot in enumerate(self._step_dots):
+                if i == current_index:
+                    color = AppTheme.COLOR_PRIMARY_BLUE
+                    hover = AppTheme.COLOR_PRIMARY_BLUE_HOVER
+                    text_color = AppTheme.COLOR_TEXT_LIGHT
+                elif i < current_index:
+                    color = AppTheme.COLOR_SUCCESS
+                    hover = AppTheme.COLOR_SUCCESS_HOVER
+                    text_color = AppTheme.COLOR_TEXT_LIGHT
+                else:
+                    color = AppTheme.COLOR_BORDER_STRONG
+                    hover = AppTheme.COLOR_SLATE
+                    text_color = AppTheme.COLOR_TEXT
+                dot.configure(fg_color=color, hover_color=hover, text_color=text_color)
+            return
+
         for dot in self._step_dots:
             try:
                 dot.destroy()
@@ -743,64 +845,169 @@ class TutorialOverlay(ctk.CTkFrame):
             dot.pack(side="left", padx=(0, 4))
             self._step_dots.append(dot)
 
-    def _place_card(self, target_widget: Optional[Any] = None) -> None:
-        """Positions the floating tutorial card cleanly inside root."""
+    def _layout_spotlight_and_card(self, target_widget: Optional[Any] = None) -> None:
+        """Lays out the 4-panel dimmed backdrop, spotlight ring, and anchored card."""
         try:
             self._host_root.update_idletasks()
-            self.update_idletasks()
-            rw = self._host_root.winfo_width()
-            rh = self._host_root.winfo_height()
-            card_w = 460
-            card_h = max(self.winfo_reqheight(), 260)
-            if rw > 500 and rh > 380:
-                margin = 20
-                x = rw - card_w - margin
-                y = rh - card_h - margin
-                if target_widget is not None and target_widget.winfo_exists():
-                    tx = target_widget.winfo_rootx() - self._host_root.winfo_rootx()
-                    ty = target_widget.winfo_rooty() - self._host_root.winfo_rooty()
-                    tw = target_widget.winfo_width()
-                    th = target_widget.winfo_height()
-                    # If target sits in bottom-right, move card to bottom-left or top-right
-                    if tx + tw > x and ty + th > y:
-                        if tx > card_w + margin * 2:
-                            x = margin
-                        elif ty > card_h + margin * 2:
-                            y = margin + 56
-                self.place(x=max(margin, x), y=max(margin, y), width=card_w)
-            else:
-                self.place(relx=0.98, rely=0.96, anchor="se")
-            self.lift()
         except Exception:
-            try:
-                self.place(relx=0.98, rely=0.96, anchor="se")
-            except Exception:
-                pass
+            pass
+        self._highlight_widget(target_widget)
+        self._place_card(target_widget)
 
-    def _highlight_widget(self, target_widget: Optional[Any]) -> None:
-        """Draws a crisp 4-edge highlight border around the target widget."""
-        self._clear_highlight()
+    @staticmethod
+    def _rect_intersection_area(
+        ax: int, ay: int, aw: int, ah: int,
+        bx: int, by: int, bw: int, bh: int,
+    ) -> int:
+        ix = max(0, min(ax + aw, bx + bw) - max(ax, bx))
+        iy = max(0, min(ay + ah, by + bh) - max(ay, by))
+        return ix * iy
+
+    def _get_spotlight_box(self, target_widget: Optional[Any]) -> Optional[Tuple[int, int, int, int]]:
         if target_widget is None:
-            return
+            return None
         try:
             if not target_widget.winfo_exists():
-                return
-            self._host_root.update_idletasks()
+                return None
             rx = self._host_root.winfo_rootx()
             ry = self._host_root.winfo_rooty()
+            rw = self._host_root.winfo_width()
+            rh = self._host_root.winfo_height()
             tx = target_widget.winfo_rootx() - rx
             ty = target_widget.winfo_rooty() - ry
             tw = target_widget.winfo_width()
             th = target_widget.winfo_height()
             if tw <= 1 or th <= 1:
+                return None
+            pad = self.SPOTLIGHT_PADDING
+            sx = max(0, tx - pad)
+            sy = max(0, ty - pad)
+            sx2 = min(rw, tx + tw + pad)
+            sy2 = min(rh, ty + th + pad)
+            if sx2 <= sx or sy2 <= sy:
+                return None
+            return (sx, sy, sx2 - sx, sy2 - sy)
+        except Exception:
+            return None
+
+    def _compute_card_position(
+        self,
+        rw: int,
+        rh: int,
+        card_w: int,
+        card_h: int,
+        spotlight: Optional[Tuple[int, int, int, int]],
+    ) -> Tuple[int, int]:
+        margin = 16
+        gap = 16
+        max_x = max(0, rw - card_w - margin)
+        max_y = max(0, rh - card_h - margin)
+
+        if spotlight is None:
+            return (max(0, (rw - card_w) // 2), max(0, (rh - card_h) // 2))
+
+        sx, sy, sw, sh = spotlight
+        candidates = [
+            # Below target
+            (max(margin, min(sx, max_x)), sy + sh + gap),
+            # Above target
+            (max(margin, min(sx, max_x)), sy - card_h - gap),
+            # Right of target
+            (sx + sw + gap, max(margin, min(sy, max_y))),
+            # Left of target
+            (sx - card_w - gap, max(margin, min(sy, max_y))),
+        ]
+
+        for cx, cy in candidates:
+            if (
+                margin <= cx <= rw - card_w - margin
+                and margin <= cy <= rh - card_h - margin
+                and self._rect_intersection_area(cx, cy, card_w, card_h, sx, sy, sw, sh) == 0
+            ):
+                return (cx, cy)
+
+        # Fallback: clamp candidates + corners and pick minimal overlap with spotlight
+        fallback_points = [
+            (max(0, min(cx, max_x)), max(0, min(cy, max_y)))
+            for cx, cy in candidates
+        ] + [
+            (max_x, margin),
+            (margin, margin),
+            (max_x, max_y),
+        ]
+        return min(
+            fallback_points,
+            key=lambda pt: self._rect_intersection_area(pt[0], pt[1], card_w, card_h, sx, sy, sw, sh),
+        )
+
+    def _place_card(self, target_widget: Optional[Any] = None) -> None:
+        """Positions the floating tutorial card anchored next to the target widget."""
+        try:
+            self._host_root.update_idletasks()
+            self.update_idletasks()
+            rw = self._host_root.winfo_width()
+            rh = self._host_root.winfo_height()
+            self._last_root_size = (rw, rh)
+            card_w = min(self.CARD_WIDTH, max(320, rw - 24)) if rw > 40 else self.CARD_WIDTH
+            card_h = max(self.winfo_reqheight(), 280)
+            if rw > 320 and rh > 280:
+                spotlight = self._get_spotlight_box(target_widget)
+                x, y = self._compute_card_position(rw, rh, card_w, card_h, spotlight)
+                self.configure(width=card_w)
+                self.place(x=x, y=y)
+            else:
+                self.place(relx=0.5, rely=0.5, anchor="center")
+            self.lift()
+        except Exception:
+            try:
+                self.place(relx=0.5, rely=0.5, anchor="center")
+            except Exception:
+                pass
+
+    @staticmethod
+    def _place_rect(widget: Any, x: int, y: int, w: int, h: int) -> None:
+        widget.configure(width=max(1, int(w)), height=max(1, int(h)))
+        widget.place(x=int(x), y=int(y))
+
+    def _highlight_widget(self, target_widget: Optional[Any]) -> None:
+        """Places the 4-panel dimmed backdrop and spotlight ring around target_widget."""
+        self._clear_highlight()
+        try:
+            self._host_root.update_idletasks()
+            rw = self._host_root.winfo_width()
+            rh = self._host_root.winfo_height()
+            if rw <= 1 or rh <= 1:
                 return
+
+            spotlight = self._get_spotlight_box(target_widget)
+            top_dim, bottom_dim, left_dim, right_dim = self._dim_panels
+
+            if spotlight is None:
+                self._place_rect(top_dim, 0, 0, rw, rh)
+                top_dim.lift()
+                self.lift()
+                return
+
+            sx, sy, sw, sh = spotlight
+            if sy > 0:
+                self._place_rect(top_dim, 0, 0, rw, sy)
+            if sy + sh < rh:
+                self._place_rect(bottom_dim, 0, sy + sh, rw, rh - (sy + sh))
+            if sx > 0:
+                self._place_rect(left_dim, 0, sy, sx, sh)
+            if sx + sw < rw:
+                self._place_rect(right_dim, sx + sw, sy, rw - (sx + sw), sh)
+
+            for panel in self._dim_panels:
+                if panel.winfo_manager():
+                    panel.lift()
 
             t = self.HIGHLIGHT_THICKNESS
             top_bar, bottom_bar, left_bar, right_bar = self._highlight_bars
-            top_bar.place(x=tx - t, y=ty - t, width=tw + 2 * t, height=t)
-            bottom_bar.place(x=tx - t, y=ty + th, width=tw + 2 * t, height=t)
-            left_bar.place(x=tx - t, y=ty, width=t, height=th)
-            right_bar.place(x=tx + tw, y=ty, width=t, height=th)
+            self._place_rect(top_bar, sx - t, sy - t, sw + 2 * t, t)
+            self._place_rect(bottom_bar, sx - t, sy + sh, sw + 2 * t, t)
+            self._place_rect(left_bar, sx - t, sy, t, sh)
+            self._place_rect(right_bar, sx + sw, sy, t, sh)
             for bar in self._highlight_bars:
                 bar.lift()
             self.lift()
@@ -808,6 +1015,11 @@ class TutorialOverlay(ctk.CTkFrame):
             self._clear_highlight()
 
     def _clear_highlight(self) -> None:
+        for panel in self._dim_panels:
+            try:
+                panel.place_forget()
+            except Exception:
+                pass
         for bar in self._highlight_bars:
             try:
                 bar.place_forget()
@@ -815,7 +1027,7 @@ class TutorialOverlay(ctk.CTkFrame):
                 pass
 
     def hide(self) -> None:
-        """Hides the overlay card and highlight border without destroying."""
+        """Hides the overlay card, dimmed backdrop, and spotlight ring without destroying."""
         self._clear_highlight()
         try:
             self.place_forget()
@@ -823,7 +1035,19 @@ class TutorialOverlay(ctk.CTkFrame):
             pass
 
     def destroy_overlay(self) -> None:
-        """Destroys highlight bars and the overlay card."""
+        """Destroys dimmed backdrop, spotlight ring, and the overlay card."""
+        if self._configure_bind_id is not None:
+            try:
+                self._host_root.unbind("<Configure>", self._configure_bind_id)
+            except Exception:
+                pass
+            self._configure_bind_id = None
+        for panel in self._dim_panels:
+            try:
+                panel.destroy()
+            except Exception:
+                pass
+        self._dim_panels.clear()
         for bar in self._highlight_bars:
             try:
                 bar.destroy()
@@ -835,6 +1059,10 @@ class TutorialOverlay(ctk.CTkFrame):
                 self.destroy()
         except Exception:
             pass
+
+    def _handle_backdrop_click(self, _event: Any = None) -> str:
+        self._handle_next()
+        return "break"
 
     def _handle_prev(self) -> None:
         if self._on_prev is not None:

@@ -29,9 +29,9 @@ from core.database import DatabaseManager
 from core.models import UserSession
 
 try:
-    from test_ui_suite import get_module_root
+    from test_ui_suite import destroy_module_root, get_module_root
 except ImportError:
-    from tests.test_ui_suite import get_module_root
+    from tests.test_ui_suite import destroy_module_root, get_module_root
 from ui.main_window import MainWindow
 from ui.tutorial_overlay import (
     TUTORIAL_STEPS,
@@ -54,6 +54,10 @@ class BaseTutorialTestCase(unittest.TestCase):
                 child.destroy()
             except Exception:
                 pass
+
+
+def tearDownModule():
+    destroy_module_root()
 
 
 class TestTutorialConfig(unittest.TestCase):
@@ -304,6 +308,78 @@ class TestInteractiveTutorialManager(BaseTutorialTestCase):
             self.root.report_callback_exception = orig_handler
 
         self.assertEqual(errors, [], f"Unexpected Tk callback errors: {errors}")
+
+    def test_spotlight_dim_panels_ring_fonts_anchoring_and_click_anywhere(self):
+        host = ctk.CTkToplevel(self.root)
+        host.deiconify()
+        host.geometry("1200x800+40+40")
+        host.update()
+        host.update_idletasks()
+
+        target = ctk.CTkFrame(host, width=260, height=70)
+        target.place(x=80, y=60)
+        host.update_idletasks()
+
+        cfg = {"tutorial_completed": False}
+        mgr = InteractiveTutorialManager(
+            root=host,
+            config=cfg,
+            widget_resolver=lambda step: target if step.target_attr == "box1" else None,
+            steps=self._sample_steps(),
+        )
+        try:
+            self.assertTrue(mgr.start())
+            overlay = mgr.overlay
+            self.assertIsNotNone(overlay)
+
+            # 1. Dimmed backdrop (4 panels) + spotlight ring (4 bars) exist and are placed
+            self.assertEqual(len(overlay._dim_panels), 4)
+            self.assertEqual(len(overlay._highlight_bars), 4)
+            self.assertTrue(all(p.winfo_exists() for p in overlay._dim_panels))
+            self.assertTrue(all(b.winfo_exists() for b in overlay._highlight_bars))
+            self.assertTrue(any(p.winfo_manager() == "place" for p in overlay._dim_panels))
+            self.assertTrue(all(b.winfo_manager() == "place" for b in overlay._highlight_bars))
+
+            # 2. Larger readable font sizes & click-anywhere hint
+            self.assertGreaterEqual(overlay.lbl_title.cget("font")[1], 18)
+            self.assertGreaterEqual(overlay.lbl_description.cget("font")[1], 15)
+            self.assertGreaterEqual(overlay.lbl_tips.cget("font")[1], 13)
+            self.assertIn("คลิกที่ใดก็ได้เพื่อไปต่อ", overlay.lbl_click_hint.cget("text"))
+
+            # 3. Card is anchored right next to target (below target at y=60+70=130), not stuck in bottom-left
+            host.update_idletasks()
+            card_x = overlay.winfo_x()
+            card_y = overlay.winfo_y()
+            self.assertLess(card_y, 300, f"Expected card anchored near top target, got y={card_y}")
+            self.assertGreater(card_y, target.winfo_y() + target.winfo_height())
+            self.assertGreaterEqual(card_x, 0)
+
+            # 4. Clicking dimmed backdrop advances to next step; prev button does not double-fire
+            dim_refs = list(overlay._dim_panels)
+            bar_refs = list(overlay._highlight_bars)
+            overlay._dim_panels[1]._canvas.event_generate("<Button-1>")
+            host.update()
+            self.assertEqual(mgr.current_index, 1)
+
+            overlay.lbl_description._label.event_generate("<Button-1>")
+            host.update()
+            self.assertEqual(mgr.current_index, 2)
+
+            overlay.btn_prev.invoke()
+            self.assertEqual(mgr.current_index, 1)
+
+            # 5. Completing / skipping cleans up dim panels & highlight bars
+            mgr.skip()
+            self.assertFalse(mgr.is_active)
+            self.assertFalse(any(p.winfo_exists() for p in dim_refs))
+            self.assertFalse(any(b.winfo_exists() for b in bar_refs))
+        finally:
+            if mgr.is_active:
+                mgr.stop()
+            try:
+                host.destroy()
+            except Exception:
+                pass
 
 
 class TestMainWindowTutorialIntegration(BaseTutorialTestCase):
