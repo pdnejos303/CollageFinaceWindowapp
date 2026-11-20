@@ -12,6 +12,7 @@ Provides:
 
 from dataclasses import dataclass
 import inspect
+import tkinter as tk
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 import customtkinter as ctk
 
@@ -455,8 +456,11 @@ class TutorialOverlay(ctk.CTkFrame):
     """
 
     HIGHLIGHT_THICKNESS = 4
-    SPOTLIGHT_PADDING = 8
+    SPOTLIGHT_PADDING = 10
+    SPOTLIGHT_RADIUS = 18
     DIM_COLOR = "#0B1120"
+    SCRIM_ALPHA = 0.60
+    TRANSPARENT_KEY = "#FF00FE"
     SPOTLIGHT_RING_COLOR = "#38BDF8"
     CARD_WIDTH = 500
 
@@ -494,22 +498,82 @@ class TutorialOverlay(ctk.CTkFrame):
         self._jump_labels: List[str] = []
         self._dim_panels: List[ctk.CTkFrame] = []
         self._highlight_bars: List[ctk.CTkFrame] = []
+        self._scrim: Optional[tk.Toplevel] = None
+        self._scrim_canvas: Optional[tk.Canvas] = None
+        self._scrim_supported: bool = False
         self._last_target_widget: Optional[Any] = None
         self._last_root_size: Tuple[int, int] = (0, 0)
         self._configure_bind_id: Optional[str] = None
+        self._map_bind_id: Optional[str] = None
+        self._unmap_bind_id: Optional[str] = None
 
-        self._build_dim_panels()
-        self._build_highlight_bars()
+        self._build_scrim()
+        if not self._scrim_supported:
+            self._build_dim_panels()
+            self._build_highlight_bars()
         self._build_card_ui()
-        self._bind_root_configure()
+        self._bind_root_events()
 
-    def _bind_root_configure(self) -> None:
+    def _build_scrim(self) -> None:
+        try:
+            scrim = tk.Toplevel(self._host_root)
+            scrim.withdraw()
+            scrim.overrideredirect(True)
+            scrim.transient(self._host_root)
+            scrim.configure(bg=self.TRANSPARENT_KEY)
+            scrim.attributes("-alpha", self.SCRIM_ALPHA)
+            scrim.attributes("-transparentcolor", self.TRANSPARENT_KEY)
+
+            canvas = tk.Canvas(
+                scrim,
+                bg=self.TRANSPARENT_KEY,
+                highlightthickness=0,
+                bd=0,
+                cursor="hand2",
+            )
+            canvas.pack(fill="both", expand=True)
+            canvas.bind("<Button-1>", self._handle_backdrop_click)
+
+            self._scrim = scrim
+            self._scrim_canvas = canvas
+            self._scrim_supported = True
+        except Exception:
+            if self._scrim is not None:
+                try:
+                    self._scrim.destroy()
+                except Exception:
+                    pass
+            self._scrim = None
+            self._scrim_canvas = None
+            self._scrim_supported = False
+
+    def _bind_root_events(self) -> None:
         try:
             self._configure_bind_id = self._host_root.bind(
                 "<Configure>", self._on_root_configure, add="+"
             )
+            self._map_bind_id = self._host_root.bind(
+                "<Map>", self._on_root_map, add="+"
+            )
+            self._unmap_bind_id = self._host_root.bind(
+                "<Unmap>", self._on_root_unmap, add="+"
+            )
         except Exception:
-            self._configure_bind_id = None
+            pass
+
+    def _on_root_map(self, _event: Any = None) -> None:
+        try:
+            if self.winfo_exists() and self.winfo_ismapped():
+                self._layout_spotlight_and_card(self._last_target_widget)
+        except Exception:
+            pass
+
+    def _on_root_unmap(self, _event: Any = None) -> None:
+        try:
+            if self._scrim is not None and self._scrim.winfo_exists():
+                self._scrim.withdraw()
+        except Exception:
+            pass
 
     def _on_root_configure(self, _event: Any = None) -> None:
         try:
@@ -517,9 +581,13 @@ class TutorialOverlay(ctk.CTkFrame):
                 return
             rw = self._host_root.winfo_width()
             rh = self._host_root.winfo_height()
+            rx = self._host_root.winfo_rootx()
+            ry = self._host_root.winfo_rooty()
             if (rw, rh) != self._last_root_size and rw > 1 and rh > 1:
                 self._last_root_size = (rw, rh)
                 self._layout_spotlight_and_card(self._last_target_widget)
+            elif self._scrim is not None and self._scrim.winfo_exists() and self._host_root.winfo_viewable():
+                self._scrim.geometry(f"{rw}x{rh}+{rx}+{ry}")
         except Exception:
             pass
 
@@ -846,13 +914,162 @@ class TutorialOverlay(ctk.CTkFrame):
             self._step_dots.append(dot)
 
     def _layout_spotlight_and_card(self, target_widget: Optional[Any] = None) -> None:
-        """Lays out the 4-panel dimmed backdrop, spotlight ring, and anchored card."""
+        """Atomically measures geometry once, then updates scrim/spotlight and card in one pass."""
         try:
             self._host_root.update_idletasks()
+            self.update_idletasks()
         except Exception:
             pass
-        self._highlight_widget(target_widget)
-        self._place_card(target_widget)
+
+        try:
+            rw = self._host_root.winfo_width()
+            rh = self._host_root.winfo_height()
+            rx = self._host_root.winfo_rootx()
+            ry = self._host_root.winfo_rooty()
+        except Exception:
+            return
+
+        self._last_root_size = (rw, rh)
+        card_w = min(self.CARD_WIDTH, max(320, rw - 24)) if rw > 40 else self.CARD_WIDTH
+        card_h = max(self.winfo_reqheight(), 280)
+        spotlight = self._get_spotlight_box(target_widget) if (rw > 1 and rh > 1) else None
+
+        if rw > 320 and rh > 280:
+            card_x, card_y = self._compute_card_position(rw, rh, card_w, card_h, spotlight)
+            self.configure(width=card_w)
+            self.place(x=card_x, y=card_y)
+        else:
+            card_x = max(0, (rw - card_w) // 2)
+            card_y = max(0, (rh - card_h) // 2)
+            self.place(relx=0.5, rely=0.5, anchor="center")
+
+        if self._scrim_supported and self._scrim is not None and self._scrim_canvas is not None:
+            self._render_scrim(rw, rh, rx, ry, spotlight, (card_x, card_y, card_w, card_h))
+        else:
+            self._render_fallback_panels(rw, rh, spotlight)
+
+        try:
+            self.lift()
+        except Exception:
+            pass
+
+    @staticmethod
+    def _rounded_rect_points(x1: int, y1: int, x2: int, y2: int, r: int) -> List[int]:
+        r = max(4, min(r, max(4, (x2 - x1) // 2), max(4, (y2 - y1) // 2)))
+        return [
+            x1 + r, y1,
+            x2 - r, y1,
+            x2, y1,
+            x2, y1 + r,
+            x2, y2 - r,
+            x2, y2,
+            x2 - r, y2,
+            x1 + r, y2,
+            x1, y2,
+            x1, y2 - r,
+            x1, y1 + r,
+            x1, y1,
+        ]
+
+    def _render_scrim(
+        self,
+        rw: int,
+        rh: int,
+        rx: int,
+        ry: int,
+        spotlight: Optional[Tuple[int, int, int, int]],
+        card_rect: Tuple[int, int, int, int],
+    ) -> None:
+        if self._scrim is None or self._scrim_canvas is None or rw <= 1 or rh <= 1:
+            return
+        try:
+            canvas = self._scrim_canvas
+            canvas.delete("all")
+            canvas.create_rectangle(0, 0, rw, rh, fill=self.DIM_COLOR, outline="", tags="backdrop")
+
+            if spotlight is not None:
+                sx, sy, sw, sh = spotlight
+                pts = self._rounded_rect_points(sx, sy, sx + sw, sy + sh, self.SPOTLIGHT_RADIUS)
+                canvas.create_polygon(
+                    pts,
+                    smooth=True,
+                    fill=self.TRANSPARENT_KEY,
+                    outline=self.SPOTLIGHT_RING_COLOR,
+                    width=self.HIGHLIGHT_THICKNESS,
+                    tags="spotlight",
+                )
+
+            cx, cy, cw, ch = card_rect
+            canvas.create_rectangle(
+                cx, cy, cx + cw, cy + ch,
+                fill=self.TRANSPARENT_KEY,
+                outline="",
+                tags="card_cutout",
+            )
+
+            self._scrim.geometry(f"{rw}x{rh}+{rx}+{ry}")
+            if self._host_root.winfo_viewable():
+                self._scrim.deiconify()
+                self._scrim.lift()
+            else:
+                self._scrim.withdraw()
+        except Exception:
+            pass
+
+    def _render_fallback_panels(
+        self,
+        rw: int,
+        rh: int,
+        spotlight: Optional[Tuple[int, int, int, int]],
+    ) -> None:
+        if rw <= 1 or rh <= 1 or not self._dim_panels:
+            return
+        try:
+            top_dim, bottom_dim, left_dim, right_dim = self._dim_panels
+            if spotlight is None:
+                self._place_rect(top_dim, 0, 0, rw, rh)
+                for p in (bottom_dim, left_dim, right_dim):
+                    p.place_forget()
+                for b in self._highlight_bars:
+                    b.place_forget()
+                top_dim.lift()
+                return
+
+            sx, sy, sw, sh = spotlight
+            if sy > 0:
+                self._place_rect(top_dim, 0, 0, rw, sy)
+                top_dim.lift()
+            else:
+                top_dim.place_forget()
+
+            if sy + sh < rh:
+                self._place_rect(bottom_dim, 0, sy + sh, rw, rh - (sy + sh))
+                bottom_dim.lift()
+            else:
+                bottom_dim.place_forget()
+
+            if sx > 0:
+                self._place_rect(left_dim, 0, sy, sx, sh)
+                left_dim.lift()
+            else:
+                left_dim.place_forget()
+
+            if sx + sw < rw:
+                self._place_rect(right_dim, sx + sw, sy, rw - (sx + sw), sh)
+                right_dim.lift()
+            else:
+                right_dim.place_forget()
+
+            t = self.HIGHLIGHT_THICKNESS
+            top_bar, bottom_bar, left_bar, right_bar = self._highlight_bars
+            self._place_rect(top_bar, sx - t, sy - t, sw + 2 * t, t)
+            self._place_rect(bottom_bar, sx - t, sy + sh, sw + 2 * t, t)
+            self._place_rect(left_bar, sx - t, sy, t, sh)
+            self._place_rect(right_bar, sx + sw, sy, t, sh)
+            for bar in self._highlight_bars:
+                bar.lift()
+        except Exception:
+            self._clear_highlight()
 
     @staticmethod
     def _rect_intersection_area(
@@ -942,27 +1159,7 @@ class TutorialOverlay(ctk.CTkFrame):
 
     def _place_card(self, target_widget: Optional[Any] = None) -> None:
         """Positions the floating tutorial card anchored next to the target widget."""
-        try:
-            self._host_root.update_idletasks()
-            self.update_idletasks()
-            rw = self._host_root.winfo_width()
-            rh = self._host_root.winfo_height()
-            self._last_root_size = (rw, rh)
-            card_w = min(self.CARD_WIDTH, max(320, rw - 24)) if rw > 40 else self.CARD_WIDTH
-            card_h = max(self.winfo_reqheight(), 280)
-            if rw > 320 and rh > 280:
-                spotlight = self._get_spotlight_box(target_widget)
-                x, y = self._compute_card_position(rw, rh, card_w, card_h, spotlight)
-                self.configure(width=card_w)
-                self.place(x=x, y=y)
-            else:
-                self.place(relx=0.5, rely=0.5, anchor="center")
-            self.lift()
-        except Exception:
-            try:
-                self.place(relx=0.5, rely=0.5, anchor="center")
-            except Exception:
-                pass
+        self._layout_spotlight_and_card(target_widget)
 
     @staticmethod
     def _place_rect(widget: Any, x: int, y: int, w: int, h: int) -> None:
@@ -970,51 +1167,29 @@ class TutorialOverlay(ctk.CTkFrame):
         widget.place(x=int(x), y=int(y))
 
     def _highlight_widget(self, target_widget: Optional[Any]) -> None:
-        """Places the 4-panel dimmed backdrop and spotlight ring around target_widget."""
-        self._clear_highlight()
+        """Updates spotlight backdrop and ring around target_widget without clearing first."""
         try:
-            self._host_root.update_idletasks()
             rw = self._host_root.winfo_width()
             rh = self._host_root.winfo_height()
-            if rw <= 1 or rh <= 1:
-                return
-
+            rx = self._host_root.winfo_rootx()
+            ry = self._host_root.winfo_rooty()
             spotlight = self._get_spotlight_box(target_widget)
-            top_dim, bottom_dim, left_dim, right_dim = self._dim_panels
-
-            if spotlight is None:
-                self._place_rect(top_dim, 0, 0, rw, rh)
-                top_dim.lift()
-                self.lift()
-                return
-
-            sx, sy, sw, sh = spotlight
-            if sy > 0:
-                self._place_rect(top_dim, 0, 0, rw, sy)
-            if sy + sh < rh:
-                self._place_rect(bottom_dim, 0, sy + sh, rw, rh - (sy + sh))
-            if sx > 0:
-                self._place_rect(left_dim, 0, sy, sx, sh)
-            if sx + sw < rw:
-                self._place_rect(right_dim, sx + sw, sy, rw - (sx + sw), sh)
-
-            for panel in self._dim_panels:
-                if panel.winfo_manager():
-                    panel.lift()
-
-            t = self.HIGHLIGHT_THICKNESS
-            top_bar, bottom_bar, left_bar, right_bar = self._highlight_bars
-            self._place_rect(top_bar, sx - t, sy - t, sw + 2 * t, t)
-            self._place_rect(bottom_bar, sx - t, sy + sh, sw + 2 * t, t)
-            self._place_rect(left_bar, sx - t, sy, t, sh)
-            self._place_rect(right_bar, sx + sw, sy, t, sh)
-            for bar in self._highlight_bars:
-                bar.lift()
-            self.lift()
+            if self._scrim_supported and self._scrim is not None and self._scrim_canvas is not None:
+                card_w = self.winfo_width() if self.winfo_width() > 1 else self.CARD_WIDTH
+                card_h = self.winfo_height() if self.winfo_height() > 1 else max(self.winfo_reqheight(), 280)
+                self._render_scrim(rw, rh, rx, ry, spotlight, (self.winfo_x(), self.winfo_y(), card_w, card_h))
+            else:
+                self._render_fallback_panels(rw, rh, spotlight)
         except Exception:
             self._clear_highlight()
 
     def _clear_highlight(self) -> None:
+        if self._scrim is not None:
+            try:
+                if self._scrim.winfo_exists():
+                    self._scrim.withdraw()
+            except Exception:
+                pass
         for panel in self._dim_panels:
             try:
                 panel.place_forget()
@@ -1036,12 +1211,29 @@ class TutorialOverlay(ctk.CTkFrame):
 
     def destroy_overlay(self) -> None:
         """Destroys dimmed backdrop, spotlight ring, and the overlay card."""
-        if self._configure_bind_id is not None:
+        for seq, bind_id in (
+            ("<Configure>", self._configure_bind_id),
+            ("<Map>", self._map_bind_id),
+            ("<Unmap>", self._unmap_bind_id),
+        ):
+            if bind_id is not None:
+                try:
+                    self._host_root.unbind(seq, bind_id)
+                except Exception:
+                    pass
+        self._configure_bind_id = None
+        self._map_bind_id = None
+        self._unmap_bind_id = None
+
+        if self._scrim is not None:
             try:
-                self._host_root.unbind("<Configure>", self._configure_bind_id)
+                if self._scrim.winfo_exists():
+                    self._scrim.destroy()
             except Exception:
                 pass
-            self._configure_bind_id = None
+        self._scrim = None
+        self._scrim_canvas = None
+
         for panel in self._dim_panels:
             try:
                 panel.destroy()

@@ -29,9 +29,9 @@ from core.database import DatabaseManager
 from core.models import UserSession
 
 try:
-    from test_ui_suite import destroy_module_root, get_module_root
+    from test_ui_suite import get_module_root
 except ImportError:
-    from tests.test_ui_suite import destroy_module_root, get_module_root
+    from tests.test_ui_suite import get_module_root
 from ui.main_window import MainWindow
 from ui.tutorial_overlay import (
     TUTORIAL_STEPS,
@@ -54,10 +54,6 @@ class BaseTutorialTestCase(unittest.TestCase):
                 child.destroy()
             except Exception:
                 pass
-
-
-def tearDownModule():
-    destroy_module_root()
 
 
 class TestTutorialConfig(unittest.TestCase):
@@ -332,13 +328,20 @@ class TestInteractiveTutorialManager(BaseTutorialTestCase):
             overlay = mgr.overlay
             self.assertIsNotNone(overlay)
 
-            # 1. Dimmed backdrop (4 panels) + spotlight ring (4 bars) exist and are placed
-            self.assertEqual(len(overlay._dim_panels), 4)
-            self.assertEqual(len(overlay._highlight_bars), 4)
-            self.assertTrue(all(p.winfo_exists() for p in overlay._dim_panels))
-            self.assertTrue(all(b.winfo_exists() for b in overlay._highlight_bars))
-            self.assertTrue(any(p.winfo_manager() == "place" for p in overlay._dim_panels))
-            self.assertTrue(all(b.winfo_manager() == "place" for b in overlay._highlight_bars))
+            # 1. Semi-transparent scrim + rounded spotlight ring (or fallback panels)
+            if overlay._scrim_supported:
+                self.assertIsNotNone(overlay._scrim)
+                self.assertIsNotNone(overlay._scrim_canvas)
+                self.assertTrue(overlay._scrim.winfo_exists())
+                self.assertAlmostEqual(float(overlay._scrim.attributes("-alpha")), overlay.SCRIM_ALPHA, places=2)
+                self.assertTrue(overlay._scrim_canvas.find_withtag("backdrop"))
+                self.assertTrue(overlay._scrim_canvas.find_withtag("spotlight"))
+                self.assertTrue(overlay._scrim_canvas.find_withtag("card_cutout"))
+            else:
+                self.assertEqual(len(overlay._dim_panels), 4)
+                self.assertEqual(len(overlay._highlight_bars), 4)
+                self.assertTrue(any(p.winfo_manager() == "place" for p in overlay._dim_panels))
+                self.assertTrue(all(b.winfo_manager() == "place" for b in overlay._highlight_bars))
 
             # 2. Larger readable font sizes & click-anywhere hint
             self.assertGreaterEqual(overlay.lbl_title.cget("font")[1], 18)
@@ -354,10 +357,15 @@ class TestInteractiveTutorialManager(BaseTutorialTestCase):
             self.assertGreater(card_y, target.winfo_y() + target.winfo_height())
             self.assertGreaterEqual(card_x, 0)
 
-            # 4. Clicking dimmed backdrop advances to next step; prev button does not double-fire
+            # 4. Clicking dimmed scrim advances to next step; prev button does not double-fire
+            host.update()
+            scrim_ref = overlay._scrim
             dim_refs = list(overlay._dim_panels)
             bar_refs = list(overlay._highlight_bars)
-            overlay._dim_panels[1]._canvas.event_generate("<Button-1>")
+            if overlay._scrim_supported and overlay._scrim_canvas is not None:
+                overlay._scrim_canvas.event_generate("<Button-1>", x=10, y=10)
+            else:
+                overlay._dim_panels[1]._canvas.event_generate("<Button-1>")
             host.update()
             self.assertEqual(mgr.current_index, 1)
 
@@ -368,9 +376,11 @@ class TestInteractiveTutorialManager(BaseTutorialTestCase):
             overlay.btn_prev.invoke()
             self.assertEqual(mgr.current_index, 1)
 
-            # 5. Completing / skipping cleans up dim panels & highlight bars
+            # 5. Completing / skipping cleans up scrim, dim panels & highlight bars
             mgr.skip()
             self.assertFalse(mgr.is_active)
+            if scrim_ref is not None:
+                self.assertFalse(scrim_ref.winfo_exists())
             self.assertFalse(any(p.winfo_exists() for p in dim_refs))
             self.assertFalse(any(b.winfo_exists() for b in bar_refs))
         finally:
