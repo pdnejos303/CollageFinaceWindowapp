@@ -268,7 +268,7 @@ class TutorialWelcomeDialog(ctk.CTkToplevel):
             text="ต้องการให้ระบบสอนการใช้งานแบบทีละขั้นตอนไหมครับ?",
             font=AppTheme.FONT_TITLE,
             text_color=AppTheme.COLOR_TEXT,
-            wraplength=460,
+            wraplength=500,
             justify="left",
         )
         self.lbl_question.pack(anchor="w", pady=(0, AppTheme.SPACE_SM))
@@ -282,7 +282,7 @@ class TutorialWelcomeDialog(ctk.CTkToplevel):
             ),
             font=AppTheme.FONT_BODY,
             text_color=AppTheme.COLOR_TEXT_SECONDARY,
-            wraplength=460,
+            wraplength=500,
             justify="left",
         )
         self.lbl_subtitle.pack(anchor="w", pady=(0, AppTheme.SPACE_MD))
@@ -301,7 +301,7 @@ class TutorialWelcomeDialog(ctk.CTkToplevel):
             text='สามารถเปิดคู่มือสอนใช้งานได้ทุกเมื่อที่ปุ่ม "❓ สอนใช้งาน" ในแถบเมนูด้านซ้าย',
             font=AppTheme.FONT_CAPTION,
             text_color=AppTheme.COLOR_TEXT_MUTED,
-            wraplength=440,
+            wraplength=480,
             justify="left",
         )
         self.lbl_reopen_hint.pack(anchor="w", padx=AppTheme.SPACE_SM, pady=AppTheme.SPACE_SM)
@@ -353,7 +353,7 @@ class TutorialWelcomeDialog(ctk.CTkToplevel):
     def _center_over_parent(self) -> None:
         try:
             self.update_idletasks()
-            w = max(520, self.winfo_reqwidth())
+            w = max(560, self.winfo_reqwidth())
             h = max(310, self.winfo_reqheight())
             if self._parent is not None and self._parent.winfo_exists():
                 px = self._parent.winfo_rootx()
@@ -462,7 +462,7 @@ class TutorialOverlay(ctk.CTkFrame):
     SCRIM_ALPHA = 0.60
     TRANSPARENT_KEY = "#FF00FE"
     SPOTLIGHT_RING_COLOR = "#38BDF8"
-    CARD_WIDTH = 500
+    CARD_WIDTH = 480
 
     FONT_CARD_BADGE = (AppTheme.FONT_FAMILY, 13, "bold")
     FONT_CARD_PROGRESS = (AppTheme.FONT_FAMILY, 13)
@@ -691,7 +691,7 @@ class TutorialOverlay(ctk.CTkFrame):
             text="",
             font=self.FONT_CARD_TITLE,
             text_color=AppTheme.COLOR_TEXT,
-            wraplength=452,
+            wraplength=420,
             justify="left",
         )
         self.lbl_title.pack(anchor="w", pady=(0, AppTheme.SPACE_XS))
@@ -702,7 +702,7 @@ class TutorialOverlay(ctk.CTkFrame):
             text="",
             font=self.FONT_CARD_BODY,
             text_color=AppTheme.COLOR_TEXT_SECONDARY,
-            wraplength=452,
+            wraplength=420,
             justify="left",
         )
         self.lbl_description.pack(anchor="w", pady=(0, AppTheme.SPACE_SM))
@@ -721,7 +721,7 @@ class TutorialOverlay(ctk.CTkFrame):
             text="",
             font=self.FONT_CARD_TIPS,
             text_color=AppTheme.COLOR_SECONDARY_TEXT,
-            wraplength=432,
+            wraplength=400,
             justify="left",
         )
         self.lbl_tips.pack(anchor="w", padx=AppTheme.SPACE_SM, pady=AppTheme.SPACE_SM)
@@ -805,6 +805,10 @@ class TutorialOverlay(ctk.CTkFrame):
         target_widget: Optional[Any] = None,
     ) -> None:
         """Renders the given tutorial step, updates dots/menu, and highlights target."""
+        try:
+            self.pack_propagate(True)
+        except Exception:
+            pass
         self._is_last_step = index >= total - 1
         self.lbl_page_badge.configure(text=f"หน้า: {step.page_title}")
         self.lbl_progress.configure(text=f"ขั้นตอนที่ {index + 1} / {total}")
@@ -913,10 +917,77 @@ class TutorialOverlay(ctk.CTkFrame):
             dot.pack(side="left", padx=(0, 4))
             self._step_dots.append(dot)
 
+    def begin_transition(self) -> None:
+        """Switches scrim to a clean uniform backdrop while switching pages."""
+        try:
+            self.place_forget()
+        except Exception:
+            pass
+        if self._scrim_supported and self._scrim is not None and self._scrim_canvas is not None:
+            try:
+                rw = self._host_root.winfo_width()
+                rh = self._host_root.winfo_height()
+                rx = self._host_root.winfo_rootx()
+                ry = self._host_root.winfo_rooty()
+                if rw > 1 and rh > 1:
+                    self._scrim_canvas.delete("all")
+                    self._scrim_canvas.create_rectangle(
+                        0, 0, rw, rh, fill=self.DIM_COLOR, outline="", tags="backdrop"
+                    )
+                    self._scrim.geometry(f"{rw}x{rh}+{rx}+{ry}")
+                    if self._host_root.winfo_viewable():
+                        self._scrim.deiconify()
+                        self._scrim.lift()
+                        self._scrim.update_idletasks()
+            except Exception:
+                pass
+
+    def _ensure_target_scrolled_into_view(self, target_widget: Optional[Any]) -> None:
+        """Scrolls an ancestor CTkScrollableFrame if needed so target_widget is visible."""
+        if target_widget is None:
+            return
+        try:
+            if not target_widget.winfo_exists():
+                return
+            parent = getattr(target_widget, "master", None)
+            scrollable = None
+            while parent is not None:
+                if hasattr(parent, "_parent_canvas"):
+                    scrollable = parent
+                    break
+                parent = getattr(parent, "master", None)
+            if scrollable is None:
+                return
+
+            canvas = scrollable._parent_canvas
+            scroll_h = scrollable.winfo_height()
+            canvas_h = canvas.winfo_height()
+            if scroll_h <= canvas_h or canvas_h <= 1:
+                return
+
+            target_top = target_widget.winfo_rooty() - scrollable.winfo_rooty()
+            target_h = target_widget.winfo_height()
+            target_bottom = target_top + target_h
+            yview = canvas.yview()
+            visible_top = yview[0] * scroll_h
+            visible_bottom = visible_top + canvas_h
+
+            if target_top < visible_top:
+                frac = max(0.0, (target_top - 16) / scroll_h)
+                canvas.yview_moveto(frac)
+                self._host_root.update_idletasks()
+            elif target_bottom > visible_bottom:
+                frac = max(0.0, min(1.0, (target_bottom - canvas_h + 24) / scroll_h))
+                canvas.yview_moveto(frac)
+                self._host_root.update_idletasks()
+        except Exception:
+            pass
+
     def _layout_spotlight_and_card(self, target_widget: Optional[Any] = None) -> None:
         """Atomically measures geometry once, then updates scrim/spotlight and card in one pass."""
         try:
             self._host_root.update_idletasks()
+            self._ensure_target_scrolled_into_view(target_widget)
             self.update_idletasks()
         except Exception:
             pass
@@ -930,21 +1001,38 @@ class TutorialOverlay(ctk.CTkFrame):
             return
 
         self._last_root_size = (rw, rh)
-        card_w = min(self.CARD_WIDTH, max(320, rw - 24)) if rw > 40 else self.CARD_WIDTH
+        card_w = min(self.CARD_WIDTH, max(320, rw - 32)) if rw > 40 else self.CARD_WIDTH
         card_h = max(self.winfo_reqheight(), 280)
         spotlight = self._get_spotlight_box(target_widget) if (rw > 1 and rh > 1) else None
 
         if rw > 320 and rh > 280:
             card_x, card_y = self._compute_card_position(rw, rh, card_w, card_h, spotlight)
-            self.configure(width=card_w)
+            self.configure(width=card_w, height=card_h)
+            try:
+                self.pack_propagate(False)
+            except Exception:
+                pass
             self.place(x=card_x, y=card_y)
         else:
             card_x = max(0, (rw - card_w) // 2)
             card_y = max(0, (rh - card_h) // 2)
             self.place(relx=0.5, rely=0.5, anchor="center")
 
+        try:
+            self._host_root.update_idletasks()
+            self.update_idletasks()
+        except Exception:
+            pass
+
+        actual_cw = self.winfo_width()
+        actual_ch = self.winfo_height()
+        if actual_cw > 1 and actual_ch > 1:
+            card_rect = (self.winfo_x(), self.winfo_y(), actual_cw, actual_ch)
+        else:
+            card_rect = (card_x, card_y, card_w, card_h)
+
         if self._scrim_supported and self._scrim is not None and self._scrim_canvas is not None:
-            self._render_scrim(rw, rh, rx, ry, spotlight, (card_x, card_y, card_w, card_h))
+            self._render_scrim(rw, rh, rx, ry, spotlight, card_rect)
         else:
             self._render_fallback_panels(rw, rh, spotlight)
 
@@ -1115,45 +1203,33 @@ class TutorialOverlay(ctk.CTkFrame):
         card_h: int,
         spotlight: Optional[Tuple[int, int, int, int]],
     ) -> Tuple[int, int]:
-        margin = 16
-        gap = 16
+        margin = 28
         max_x = max(0, rw - card_w - margin)
         max_y = max(0, rh - card_h - margin)
+        home = (max_x, max_y)
 
         if spotlight is None:
-            return (max(0, (rw - card_w) // 2), max(0, (rh - card_h) // 2))
+            return home
 
         sx, sy, sw, sh = spotlight
-        candidates = [
-            # Below target
-            (max(margin, min(sx, max_x)), sy + sh + gap),
-            # Above target
-            (max(margin, min(sx, max_x)), sy - card_h - gap),
-            # Right of target
-            (sx + sw + gap, max(margin, min(sy, max_y))),
-            # Left of target
-            (sx - card_w - gap, max(margin, min(sy, max_y))),
-        ]
+        is_large_target = (sw > rw * 0.55 and sh > rh * 0.45)
+        if is_large_target:
+            return home
 
-        for cx, cy in candidates:
-            if (
-                margin <= cx <= rw - card_w - margin
-                and margin <= cy <= rh - card_h - margin
-                and self._rect_intersection_area(cx, cy, card_w, card_h, sx, sy, sw, sh) == 0
-            ):
-                return (cx, cy)
+        if self._rect_intersection_area(home[0], home[1], card_w, card_h, sx, sy, sw, sh) == 0:
+            return home
 
-        # Fallback: clamp candidates + corners and pick minimal overlap with spotlight
-        fallback_points = [
-            (max(0, min(cx, max_x)), max(0, min(cy, max_y)))
-            for cx, cy in candidates
-        ] + [
-            (max_x, margin),
-            (margin, margin),
-            (max_x, max_y),
-        ]
+        top_right = (max_x, max(margin, min(76, max_y)))
+        content_left_x = min(max_x, max(276, margin))
+        bottom_left_content = (content_left_x, max_y)
+        top_left_content = (content_left_x, max(margin, min(76, max_y)))
+
+        for pt in (top_right, bottom_left_content, top_left_content):
+            if self._rect_intersection_area(pt[0], pt[1], card_w, card_h, sx, sy, sw, sh) == 0:
+                return pt
+
         return min(
-            fallback_points,
+            (home, top_right, bottom_left_content),
             key=lambda pt: self._rect_intersection_area(pt[0], pt[1], card_w, card_h, sx, sy, sw, sh),
         )
 
@@ -1394,6 +1470,8 @@ class InteractiveTutorialManager:
         step = self.steps[index]
 
         if self.navigate_callback is not None and step.page_key != self._last_page_key:
+            if self.overlay is not None and self._last_page_key is not None:
+                self.overlay.begin_transition()
             self.navigate_callback(step.page_key)
             self._last_page_key = step.page_key
 

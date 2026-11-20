@@ -349,13 +349,22 @@ class TestInteractiveTutorialManager(BaseTutorialTestCase):
             self.assertGreaterEqual(overlay.lbl_tips.cget("font")[1], 13)
             self.assertIn("คลิกที่ใดก็ได้เพื่อไปต่อ", overlay.lbl_click_hint.cget("text"))
 
-            # 3. Card is anchored right next to target (below target at y=60+70=130), not stuck in bottom-left
+            # 3. Card sits in consistent bottom-right home when target does not overlap it
             host.update_idletasks()
             card_x = overlay.winfo_x()
             card_y = overlay.winfo_y()
-            self.assertLess(card_y, 300, f"Expected card anchored near top target, got y={card_y}")
-            self.assertGreater(card_y, target.winfo_y() + target.winfo_height())
-            self.assertGreaterEqual(card_x, 0)
+            self.assertGreaterEqual(card_x, 650, f"Expected card in bottom-right home, got x={card_x}")
+            self.assertGreaterEqual(card_y, 280, f"Expected card in bottom-right home, got y={card_y}")
+            self.assertEqual(overlay.winfo_width(), overlay.CARD_WIDTH)
+
+            # Small target in bottom-right -> card moves cleanly to top-right (never sidebar)
+            br_x, br_y = overlay._compute_card_position(1200, 800, 480, 380, (700, 450, 350, 220))
+            self.assertGreaterEqual(br_x, 650)
+            self.assertLessEqual(br_y, 100)
+
+            # Large workspace target -> card stays in bottom-right home (never (16, 16))
+            lg_x, lg_y = overlay._compute_card_position(1280, 800, 480, 400, (264, 165, 985, 635))
+            self.assertEqual((lg_x, lg_y), (1280 - 480 - 28, 800 - 400 - 28))
 
             # 4. Clicking dimmed scrim advances to next step; prev button does not double-fire
             host.update()
@@ -528,6 +537,64 @@ class TestMainWindowTutorialIntegration(BaseTutorialTestCase):
                 )
 
             mgr.stop()
+
+    def test_all_10_steps_stable_card_position_and_step2_visible(self):
+        self.config["show_course_registration"] = True
+        host = ctk.CTkToplevel(self.root)
+        host.attributes("-alpha", 0.0)
+        host.deiconify()
+        host.geometry("1280x800+20+20")
+        host.update()
+
+        main = MainWindow(self.db, self.session, self.config)
+        main.root = host
+        sidebar = ctk.CTkFrame(host, width=240)
+        sidebar.pack(side="left", fill="y")
+        sidebar.pack_propagate(False)
+        main.nav_buttons = {}
+        for k, full in main.nav_items_config:
+            btn = ctk.CTkButton(sidebar, text=full)
+            main.nav_buttons[k] = btn
+        main.content_area = ctk.CTkFrame(host)
+        main.content_area.pack(side="left", fill="both", expand=True)
+        host.update_idletasks()
+
+        try:
+            with patch("ui.main_window.save_config", return_value=True):
+                self.assertTrue(main.start_tutorial())
+                mgr = main.tutorial_manager
+                overlay = mgr.overlay
+                self.assertEqual(len(mgr.steps), 10)
+
+                xs = []
+                widths = []
+                for idx, step in enumerate(mgr.steps):
+                    mgr.go_to_step(idx)
+                    host.update_idletasks()
+                    x = overlay.winfo_x()
+                    w = overlay.winfo_width()
+                    xs.append(x)
+                    widths.append(w)
+                    self.assertGreaterEqual(
+                        x, 276, f"Step {step.step_id} placed card over sidebar at x={x}"
+                    )
+                    self.assertEqual(w, overlay.CARD_WIDTH)
+                    if step.step_id == "dashboard_analytics":
+                        target = main._resolve_tutorial_widget(step)
+                        box = overlay._get_spotlight_box(target)
+                        self.assertIsNotNone(box)
+                        self.assertGreaterEqual(
+                            box[3], 100, f"Step 2 spotlight height too small: {box}"
+                        )
+
+                self.assertTrue(all(x == xs[0] for x in xs), f"Card x jumped across steps: {xs}")
+                self.assertTrue(all(w == overlay.CARD_WIDTH for w in widths))
+                mgr.stop()
+        finally:
+            try:
+                host.destroy()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
